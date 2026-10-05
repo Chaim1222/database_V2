@@ -90,3 +90,21 @@ test('התחברות, טוקן ב-rpc, ורענון על 401', async () => {
 	c.logout();
 	assert.ok(!c.isLoggedIn());
 });
+
+const { parseRequests, lookupTitles } = require('../src/live.js');
+test('parseRequests: סטטוס, מבקש ותאריך; מרחבי שם אחרים מסוננים', () => {
+	const text = ['== [[ערך א]] ==', 'תודה. [[משתמש:דני]] 10:30, 5 באוקטובר 2026 (IDT)', ': {{בוצע}} [[משתמש:ג]] 12:00, 6 באוקטובר 2026',
+		'== [[קטגוריה:x]] ==', '== [[ערך ב]] ==', 'בבקשה --[[משתמש:רינה]] 11:00, 1 בספטמבר 2026', '=== תת-כותרת ===', ': ראינו'].join('\n');
+	const r = parseRequests(text);
+	assert.deepStrictEqual(r.map((x) => [x.title, x.status, x.requester]), [['ערך א', 'done', 'דני'], ['ערך ב', 'replied', 'רינה']]);
+	assert.strictEqual(r[1].date.getMonth(), 8);
+});
+
+test('lookupTitles: קיום במכלול ובוויקיפדיה (נרמול והפניות)', async () => {
+	const mw = async () => ({ query: { pages: [{ title: 'א', missing: true }, { title: 'ב', redirect: true }, { title: 'ג' }] } });
+	const wiki = async () => ({ query: { normalized: [{ from: 'א_', to: 'א' }], redirects: [{ from: 'ב', to: 'ב יעד' }], pages: [{ title: 'א', pageid: 1 }, { title: 'ב יעד', pageid: 2 }, { title: 'ג', missing: true }] } });
+	const res = await lookupTitles(['א', 'ב', 'ג'], mw, wiki);
+	assert.deepStrictEqual(res.mech, { א: 'missing', ב: 'redirect', ג: 'exists' });
+	assert.deepStrictEqual(res.wiki.ב, { id: 2, title: 'ב יעד' });
+	assert.strictEqual(res.wiki.ג, null);
+});

@@ -29,10 +29,20 @@ const MISSING = [
 		if (url.pathname.endsWith('/v_counts')) return route.fulfill({ status: 200, headers: { ...cors, 'content-range': '0-0/1', 'content-type': 'application/json' }, body: JSON.stringify([{ key: 'missing', n: 34019, updated_at: '2026-10-05T20:00:00Z' }]) });
 		route.fulfill({ status: 200, headers: { ...cors, 'content-range': '*/0', 'content-type': 'application/json' }, body: '[]' });
 	});
-	await page.route('https://mechalol.test/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body><div id="mw-content-text">old</div></body></html>' }));
+	// ה-API של המכלול והוויקיפדיה (טאבי בקשות ותרבות)
+	const REQUESTS_TEXT = '== [[ערך א]] ==\nבבקשה [[משתמש:דני]] 10:30, 5 באוקטובר 2026 (IDT)\n== [[ערך ב]] ==\nתודה [[משתמש:רינה]] 11:00, 1 בספטמבר 2026\n: {{בוצע}}';
+	const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
+	await page.route('https://mechalol.test/w/api.php**', (route) => {
+		const q = new URL(route.request().url()).searchParams;
+		if (q.get('prop') === 'revisions') return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ query: { pages: [{ revisions: [{ slots: { main: { content: REQUESTS_TEXT } } }] }] } }) });
+		if (q.get('prop') === 'info') return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ query: { pages: [{ title: 'ערך א', missing: true }, { title: 'ערך ב', missing: true }] } }) });
+		return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ query: { pages: [{ title: 'קטגוריה:דפים לטיפול תרבות/ספורט', categoryinfo: { pages: 7 } }] } }) });
+	});
+	await page.route('https://he.wikipedia.org/w/api.php**', (route) => route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ query: { pages: [{ title: 'ערך א', pageid: 1 }, { title: 'ערך ב', missing: true }] } }) }));
+	await page.route('https://mechalol.test/', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body><div id="mw-content-text">old</div></body></html>' }));
 	await page.goto('https://mechalol.test/');
 	await page.addInitScript(() => {});
-	await page.evaluate(() => { window.mw = { config: { get: (k) => ({ wgCanonicalSpecialPageName: 'Blankpage', wgPageName: 'מיוחד:דף_ריק/ניהול_ייבוא', wgScript: '/w/index.php' })[k] } }; });
+	await page.evaluate(() => { window.mw = { config: { get: (k) => ({ wgCanonicalSpecialPageName: 'Blankpage', wgPageName: 'מיוחד:דף_ריק/ניהול_ייבוא', wgScript: '/w/index.php', wgScriptPath: '/w' })[k] } }; });
 	await page.addScriptTag({ content: fs.readFileSync(BUILT, 'utf8') });
 	await page.waitForSelector('table.mchl2-table tbody tr', { timeout: 8000 }).catch(async (e) => { console.log('HTML:', (await page.content()).slice(0, 600), 'errors:', errors, 'requests:', requests.length); throw e; });
 
@@ -65,6 +75,18 @@ const MISSING = [
 	await page.click('text=סטטיסטיקה');
 	await page.waitForSelector('text=34,019');
 	checks.push(['טאב סטטיסטיקה', true]);
+
+	// בקשות ייבוא: שתי בקשות; ערך א עם נתוני מסד (v_missing), ערך ב בוצע (יש תגובת בוצע)
+	await page.click('text=בקשות ייבוא');
+	await page.waitForSelector('table.mchl2-table tbody tr', { timeout: 8000 }).catch(() => {});
+	const reqTexts = await page.$$eval('table.mchl2-table tbody tr', (r) => r.map((x) => x.textContent));
+	checks.push(['בקשות: ממתינות מוצגות כברירת מחדל (ערך א)', reqTexts.length === 1 && /ערך א/.test(reqTexts[0]) && /דני/.test(reqTexts[0])]);
+	if (process.env.DEBUG_BROWSER) console.log('REQ TAB:', (await page.textContent('.mchl2')).slice(0, 400), errors);
+	await page.click('text=הכול (2)');
+	checks.push(['בקשות: הכול = 2', (await page.$$eval('table.mchl2-table tbody tr', (r) => r.length)) === 2]);
+	await page.click('text=דפים לטיפול - תרבות');
+	await page.waitForSelector('text=ספורט', { timeout: 8000 }).catch(() => {});
+	checks.push(['תרבות: תת-קטגוריה עם ספירה', /ספורט \(7\)/.test(await page.textContent('.mchl2'))]);
 
 	let failed = 0;
 	checks.forEach(([name, ok]) => { console.log((ok ? 'ok   ' : 'FAIL ') + name); if (!ok) failed++; });

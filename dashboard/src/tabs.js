@@ -8,7 +8,7 @@ var LEVELS = [
 var YES_NO = [{ value: 'true', label: 'כן' }, { value: 'false', label: 'לא' }];
 
 var TAB_GROUPS = [
-	{ key: 'import', label: 'ייבוא', tabs: ['missing', 'missing_redirect', 'rav'] },
+	{ key: 'import', label: 'ייבוא', tabs: ['missing', 'requests', 'missing_redirect', 'rav', 'culture'] },
 	{ key: 'maint', label: 'תחזוקה', tabs: ['undoc', 'template', 'moved', 'locked', 'redirect', 'badrev', 'deletedrev'] },
 	{ key: 'stats', label: 'מערכת', tabs: ['stats', 'system'] }
 ];
@@ -68,6 +68,8 @@ var TABS = {
 		label: 'נמחקו לפי גרסה', view: 'v_rev_tasks', order: 'title.asc,id.asc', mech: true, baseFilters: [['rev_task', 'eq.deleted_by_rev']],
 		columns: [{ key: 'title', label: 'כותרת' }, { key: 'rev_id', label: 'גרסה בתבנית' }, { key: 'linked_title', label: 'מקושר אל' }], filters: [], actions: []
 	},
+	requests: { label: 'בקשות ייבוא', special: 'requests' },
+	culture: { label: 'דפים לטיפול - תרבות', special: 'culture' },
 	stats: { label: 'סטטיסטיקה', special: 'stats' },
 	system: { label: 'מצב המערכת', special: 'system' }
 };

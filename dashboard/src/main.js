@@ -13,6 +13,13 @@ function boot() {
 	var storage = null;
 	try { storage = window.sessionStorage; } catch (e) { /* אחסון חסום: ההתחברות תחזיק עד סגירת הדף */ }
 	var client = createClient({ fetch: window.fetch.bind(window), storage: storage || undefined, config: CONFIG });
-	createApp(root, client, { scriptUrl: mw.config.get('wgScript') }).start();
+	var apiUrl = mw.config.get('wgScriptPath') + '/api.php';
+	var call = function (url, extra) {
+		return function (params) {
+			var q = new URLSearchParams(Object.assign({ format: 'json', formatversion: '2' }, extra || {}, params));
+			return window.fetch(url + '?' + q.toString()).then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); });
+		};
+	};
+	createApp(root, client, { scriptUrl: mw.config.get('wgScript'), mwApi: call(apiUrl), wikiApi: call('https://he.wikipedia.org/w/api.php', { origin: '*' }) }).start();
 }
 if (typeof module === 'undefined') boot();

@@ -12,7 +12,7 @@ function h(tag, attrs, children) {
 
 function createApp(root, client, env) {
 	var state = { tab: 'missing', page: 0, search: '', filters: {}, method: 'list', mode: 'a', rows: [], count: null, error: null, loading: false,
-		admin: false, expanded: {}, details: {}, marks: {}, notice: '' };
+		admin: false, expanded: {}, details: {}, marks: {}, notice: '', req: { rows: null, filter: 'open' }, culture: { subcats: null, selected: null, members: [], cont: null, loading: false } };
 	var wikiBase = 'https://he.wikipedia.org/wiki/';
 	var editBase = (env.scriptUrl || '/w/index.php');
 	var token = 0;
@@ -31,9 +31,68 @@ function createApp(root, client, env) {
 			.catch(function (e) { if (my !== token) return; state.loading = false; state.rows = []; state.error = e.message; render(); });
 	}
 
-	function renderSpecial() {
+	function loadRequests() {
 		var my = ++token;
+		state.error = null; state.req.rows = null; render();
+		var reqs;
+		return env.mwApi({ action: 'query', prop: 'revisions', rvprop: 'content', rvslots: 'main', titles: REQUESTS_PAGE }).then(function (d) {
+			var pg = d.query && d.query.pages && d.query.pages[0];
+			if (!pg || !pg.revisions) throw new Error('הדף "' + REQUESTS_PAGE + '" לא נמצא');
+			reqs = parseRequests(pg.revisions[0].slots.main.content);
+			return lookupTitles(reqs.map(function (r) { return r.title; }), env.mwApi, env.wikiApi);
+		}).then(function (found) {
+			reqs.forEach(function (r) {
+				r.mech = found.mech[r.title] || 'missing';
+				r.wiki = found.wiki[r.title] || null;
+				if (r.mech === 'exists' && r.status !== 'done') { r.status = 'done'; r.doneBy = 'exists'; }   // ערך שכבר קיים במכלול: הבקשה בוצעה (הכרעת חיים, 2026-09-29)
+			});
+			var ids = reqs.filter(function (r) { return r.wiki; }).map(function (r) { return r.wiki.id; });
+			if (!ids.length) return [];
+			var chunksOf = [];
+			for (var i = 0; i < ids.length; i += 150) chunksOf.push(ids.slice(i, i + 150));
+			return Promise.all(chunksOf.map(function (b) {
+				return client.select('v_missing', { params: [['id', 'in.(' + b.join(',') + ')']], count: false, from: 0, to: b.length - 1 }).then(function (res) { return res.data; });
+			})).then(function (parts) { return [].concat.apply([], parts); });
+		}).then(function (dbRows) {
+			if (my !== token) return;
+			var byId = {};
+			dbRows.forEach(function (r) { byId[r.id] = r; });
+			state.req.rows = reqs.map(function (r) { return { req: r, db: r.wiki ? byId[r.wiki.id] || null : null }; })
+				.sort(function (a, b) { return (b.req.date || 0) - (a.req.date || 0); });
+			render();
+		}).catch(function (e) { if (my === token) { state.error = e.message; render(); } });
+	}
+
+	function loadCulture(subcat) {
+		var my = ++token, c = state.culture;
+		state.error = null;
+		if (!subcat) {
+			c.selected = null;
+			if (c.subcats) { render(); return Promise.resolve(); }
+			return env.mwApi({ action: 'query', generator: 'categorymembers', gcmtitle: CULTURE_CATEGORY, gcmtype: 'subcat', gcmlimit: '50', prop: 'categoryinfo' }).then(function (d) {
+				if (my !== token) return;
+				c.subcats = ((d.query && d.query.pages) || []).map(function (p) { return { title: p.title, count: (p.categoryinfo && p.categoryinfo.pages) || 0 }; })
+					.sort(function (a, b) { return a.title.localeCompare(b.title, 'he'); });
+				render();
+			}).catch(function (e) { if (my === token) { state.error = e.message; render(); } });
+		}
+		if (c.selected !== subcat) { c.selected = subcat; c.members = []; c.cont = null; }
+		c.loading = true; render();
+		var params = { action: 'query', list: 'categorymembers', cmtitle: subcat, cmtype: 'page', cmnamespace: '0', cmlimit: '50' };
+		if (c.cont) params.cmcontinue = c.cont;
+		return env.mwApi(params).then(function (d) {
+			if (my !== token || c.selected !== subcat) return;
+			c.members = c.members.concat((d.query && d.query.categorymembers) || []);
+			c.cont = (d.continue && d.continue.cmcontinue) || null;
+			c.loading = false; render();
+		}).catch(function (e) { c.loading = false; if (my === token) { state.error = e.message; render(); } });
+	}
+
+	function renderSpecial() {
 		var t = tab();
+		if (t.special === 'requests') return loadRequests();
+		if (t.special === 'culture') return loadCulture(null);
+		var my = ++token;
 		var req = t.special === 'stats' ? client.select('v_counts', { count: false, to: 50 }) : client.select('v_sync_status', { count: false, to: 50 });
 		return req.then(function (res) { if (my === token) { state.rows = res.data; state.error = null; render(); } })
 			.catch(function (e) { if (my === token) { state.error = e.message; render(); } });
@@ -206,8 +265,52 @@ function createApp(root, client, env) {
 		]);
 	}
 
+	var REQ_STATUS = { open: 'ממתינה', replied: 'יש תגובה', done: 'בוצע' };
+	var MECH_STATE = { exists: 'קיים במכלול', redirect: 'הפניה במכלול', missing: 'לא קיים' };
+
+	function requestsView() {
+		var rows = state.req.rows;
+		if (!rows) return h('div', { 'class': 'mchl2-muted', text: 'טוען בקשות…' });
+		var count = function (f) { return rows.filter(function (r) { return r.req.status === f; }).length; };
+		var filters = h('div', { 'class': 'mchl2-controls' }, [['open', 'ממתינות'], ['replied', 'יש תגובה'], ['done', 'בוצעו'], ['all', 'הכול']].map(function (o) {
+			var n = o[0] === 'all' ? rows.length : count(o[0]);
+			return h('button', { 'class': 'mchl2-btn' + (state.req.filter === o[0] ? ' mchl2-on' : ''), text: o[1] + ' (' + n + ')', onclick: function () { state.req.filter = o[0]; render(); } });
+		}));
+		var visible = rows.filter(function (r) { return state.req.filter === 'all' || r.req.status === state.req.filter; });
+		var head = h('tr', {}, ['כותרת', 'מבקש', 'תאריך', 'סטטוס', 'במכלול', 'רמה', 'נושא'].map(function (x) { return h('th', { text: x }); }));
+		var body = h('tbody', {}, visible.map(function (r) {
+			var q = r.req, d = r.db;
+			var title = q.wiki ? h('a', { href: wikiUrl(q.wiki.title), target: '_blank', rel: 'noopener', text: q.title }) : h('span', { text: q.title + ' (אין בוויקיפדיה)' });
+			return h('tr', {}, [h('td', {}, [title, ' ', h('a', { 'class': 'mchl2-muted', href: mechUrl(q.title, 'edit'), target: '_blank', rel: 'noopener', text: '[ייבוא]' })]),
+				h('td', { text: q.requester }), h('td', { text: q.date ? q.date.toLocaleDateString('he-IL') : '' }),
+				h('td', { text: REQ_STATUS[q.status] + (q.doneBy === 'exists' ? ' (קיים)' : '') }), h('td', { text: MECH_STATE[q.mech] || '' }),
+				h('td', { text: d ? (LEVEL_LABELS[rowLevel(d, state.method, state.mode)] || '') : (q.wiki ? 'לא בחסר' : '') }), h('td', { text: d && d.topic ? d.topic : '' })]);
+		}));
+		return h('div', {}, [filters, h('table', { 'class': 'mchl2-table' }, [h('thead', {}, [head]), body])]);
+	}
+
+	function cultureView() {
+		var c = state.culture;
+		if (!c.selected) {
+			if (!c.subcats) return h('div', { 'class': 'mchl2-muted', text: 'טוען…' });
+			if (!c.subcats.length) return h('div', { 'class': 'mchl2-muted', text: 'לא נמצאו תתי-קטגוריות (ייתכן ששם קטגוריית האם השתנה).' });
+			return h('div', { 'class': 'mchl2-controls' }, c.subcats.map(function (sc) {
+				return h('button', { 'class': 'mchl2-btn', text: sc.title.replace(CULTURE_CATEGORY + '/', '') + ' (' + sc.count.toLocaleString('he-IL') + ')', onclick: function () { loadCulture(sc.title); } });
+			}));
+		}
+		var rows = c.members.map(function (m) { return h('tr', {}, [h('td', {}, [h('a', { href: mechUrl(m.title), target: '_blank', rel: 'noopener', text: m.title })])]); });
+		return h('div', {}, [
+			h('button', { 'class': 'mchl2-btn', text: '‹ חזרה לתתי-הקטגוריות', onclick: function () { c.selected = null; render(); } }),
+			h('div', { 'class': 'mchl2-muted', text: c.selected.replace(CULTURE_CATEGORY + '/', '') }),
+			h('table', { 'class': 'mchl2-table' }, [h('tbody', {}, rows)]),
+			c.cont ? h('button', { 'class': 'mchl2-btn', text: c.loading ? 'טוען…' : 'טען עוד', disabled: c.loading ? 'disabled' : null, onclick: function () { loadCulture(c.selected); } }) : null
+		]);
+	}
+
 	function specialView() {
 		var t = tab();
+		if (t.special === 'requests') return requestsView();
+		if (t.special === 'culture') return cultureView();
 		if (t.special === 'stats') {
 			return h('table', { 'class': 'mchl2-table' }, state.rows.map(function (r) {
 				return h('tr', {}, [h('td', { text: STAT_LABELS[r.key] || r.key }), h('td', { text: Number(r.n).toLocaleString('he-IL') }), h('td', { 'class': 'mchl2-muted', text: String(r.updated_at || '').slice(0, 16).replace('T', ' ') })]);
