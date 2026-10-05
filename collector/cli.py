@@ -1,4 +1,4 @@
-"""python -m collector.cli sync | load | templates   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync | load | templates | health   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -14,10 +14,14 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 
 def main(argv):
-    if argv[:1] not in (["sync"], ["load"], ["templates"]):
-        print("שימוש: python -m collector.cli sync | load | templates", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"], ["templates"], ["health"]):
+        print("שימוש: python -m collector.cli sync | load | templates | health", file=sys.stderr)
         return 2
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    if argv[0] == "health":
+        problems = rpc.call("health_check", {})
+        print(json.dumps(problems, ensure_ascii=False, indent=2))
+        return 1 if problems else 0
     mws = {site: MediaWiki(url) for site, url in APIS.items()}
     if argv[0] == "sync":
         stats = run_sync(mws, rpc)
