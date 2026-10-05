@@ -11,6 +11,8 @@ from .state import chunks, is_live
 TEMPLATE_START_RE = re.compile(r"\{\{\s*מיון\s+ויקיפדיה\s*\|")
 DENIED_CODES = {"readapidenied", "permissiondenied", "accessdenied"}
 FETCH_BATCH = 50
+MAX_TITLE_BYTES = 255            # מגבלת כותרת ב-MediaWiki
+INVALID_TITLE_CHARS = set('[]{}|<>#')
 SEND_BATCH = 500
 
 
@@ -169,6 +171,9 @@ def check_pages(mech_mw, wiki_mw, titles_by_id, page_ids):
             rows.append({**row, "outcome": "none"})
         elif title_key(ref) == title_key(titles_by_id[mech_id]):
             rows.append({**row, "outcome": "same"})
+        elif len(ref.encode("utf-8")) > MAX_TITLE_BYTES or INVALID_TITLE_CHARS & set(ref):
+            # לא כותרת (למשל טקסט שנשבר לתוך `דף=`): לא נשאל את ה-API, ונרשם כבעיית שם
+            rows.append({**row, "outcome": "unresolved", "wiki_id": None, "template_ref": ref[:200]})
         else:
             pending[mech_id] = (row, ref)
     if pending:

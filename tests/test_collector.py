@@ -369,6 +369,49 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(rows[6]["outcome"], "none")
         self.assertEqual(rows[7], {"mech_id": 7, "outcome": "denied"})   # נעול: בידוד בחיפוש בינארי, בלי לפגוע בשאר
 
+    def test_garbage_title_is_unresolved_without_api_call(self):
+        from collector.templates import check_pages
+        long_text = "א" * 300
+        mech = self._mw({1: "{{מיון ויקיפדיה|דף=" + long_text + "}}", 2: "{{מיון ויקיפדיה|דף=[[x]]y}}"})
+        wiki = self._mw({})
+        rows = {r["mech_id"]: r for r in check_pages(mech, wiki, {1: "ב", 2: "ג"}, [1, 2])}
+        self.assertEqual((rows[1]["outcome"], rows[2]["outcome"]), ("unresolved", "unresolved"))
+        self.assertEqual(len(rows[1]["template_ref"]), 200)
+        self.assertEqual(wiki.calls, [])
+
+    def test_long_requests_use_post(self):
+        from collector.mw import MediaWiki
+
+        class Sess:
+            headers = {}
+
+            def __init__(self):
+                self.methods = []
+
+            def _resp(self):
+                class R:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self):
+                        return {"query": {}}
+                return R()
+
+            def get(self, *a, **k):
+                self.methods.append("get")
+                return self._resp()
+
+            def post(self, *a, **k):
+                self.methods.append("post")
+                return self._resp()
+        sess = Sess()
+        mw = MediaWiki("https://x/api.php", session=sess)
+        mw.get({"action": "query", "titles": "|".join(["כותרת ארוכה מאוד"] * 50)})
+        mw.get({"action": "query", "titles": "קצר"})
+        self.assertEqual(sess.methods, ["post", "get"])
+
     def test_wiki_response_missing_a_title_fails(self):
         from collector.templates import resolve_wiki_titles
 

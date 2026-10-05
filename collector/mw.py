@@ -7,6 +7,7 @@ from .state import chunks
 
 USER_AGENT = "MechalolWikipediaCompareBot/2.0 (https://www.hamichlol.org.il/; bot@hamichlol.org.il)"
 BATCH = 50
+POST_THRESHOLD = 600   # תווים לפני קידוד; מעליו POST
 
 
 class MediaWiki:
@@ -20,7 +21,11 @@ class MediaWiki:
         params = {"format": "json", "formatversion": "2", "maxlag": 5, **params}
         for attempt in range(6):
             try:
-                response = self.session.get(self.api_url, params=params, timeout=60)
+                # כותרות בעברית מקודדות פי כמה: בקשה ארוכה (למשל 50 כותרות) חורגת ממגבלת ה-URL (414). action=query נתמך גם ב-POST.
+                if sum(len(str(v)) for v in params.values()) > POST_THRESHOLD:
+                    response = self.session.post(self.api_url, data=params, timeout=60)
+                else:
+                    response = self.session.get(self.api_url, params=params, timeout=60)
                 if response.status_code in (429, 503):
                     raise requests.RequestException(f"HTTP {response.status_code}")
                 response.raise_for_status()
