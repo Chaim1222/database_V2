@@ -897,9 +897,11 @@ CREATE FUNCTION api.template_pending(p_after bigint DEFAULT 0, p_limit integer D
     AS $$
     select m.page_id, m.title
     from mirror.mech_page m
+    left join derived.template_check c on c.mech_id = m.page_id
     where m.page_id > p_after
       and m.status in ('imported_documented', 'imported_undocumented')
-      and not exists (select 1 from derived.template_check c where c.mech_id = m.page_id)
+      and (c.mech_id is null
+           or (c.outcome in ('unresolved', 'denied') and c.checked_at < now() - interval '7 days'))
     order by m.page_id
     limit p_limit;
 $$;
