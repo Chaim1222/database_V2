@@ -1,0 +1,32 @@
+name: reconcile (דוח השוואה)
+# דוח בלבד: צילום מקור מול המראה, חלון סגור, ממצאים ב-ops.reconcile_finding וסיכום בעמוד הריצה. לא משנה את המראה.
+# ידני. דורש מיגרציה 0018 וטעינה ראשונית. צילום המכלול (עם קטגוריות) לוקח כ-40 דקות.
+on:
+  workflow_dispatch:
+    inputs:
+      skip_mechalol:
+        description: "רק ויקיפדיה"
+        type: boolean
+        default: false
+
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m collector.cli reconcile ${{ inputs.skip_mechalol && '--skip-mechalol' || '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

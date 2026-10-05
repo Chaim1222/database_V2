@@ -1,4 +1,4 @@
-"""python -m collector.cli sync | load | templates | health | enrich [group...]   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync | load | templates | health | enrich [group...] | reconcile [--skip-mechalol]   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -8,6 +8,7 @@ from .rpc import Rpc
 from .dump import DumpSource
 from .enrich import GROUPS, WIKIDATA_API, run_group
 from .initial_load import run_initial_load
+from .reconcile import run_reconcile
 from .sync import run_sync
 from .templates import run_pending
 
@@ -15,8 +16,8 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 
 def main(argv):
-    if argv[:1] not in (["sync"], ["load"], ["templates"], ["health"]) and argv[:1] != ["enrich"]:
-        print("שימוש: python -m collector.cli sync | load | templates | health | enrich [group...]", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"], ["templates"], ["health"]) and argv[:1] != ["enrich"] and argv[:1] != ["reconcile"]:
+        print("שימוש: python -m collector.cli sync | load | templates | health | enrich [group...] | reconcile [--skip-mechalol]", file=sys.stderr)
         return 2
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     if argv[0] == "health":
@@ -26,6 +27,8 @@ def main(argv):
     mws = {site: MediaWiki(url) for site, url in APIS.items()}
     if argv[0] == "sync":
         stats = run_sync(mws, rpc)
+    elif argv[0] == "reconcile":
+        stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv)["sites"]}}
     elif argv[0] == "enrich":
         clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"], "wikidata": MediaWiki(WIKIDATA_API)}
         groups = argv[1:] or list(GROUPS)

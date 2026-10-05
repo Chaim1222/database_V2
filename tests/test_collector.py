@@ -449,5 +449,51 @@ class ImportV1Tests(unittest.TestCase):
         self.assertEqual(import_v1.main(["--dry-run"], env=env, session=Sess()), 0)
 
 
+class ReconcileTests(unittest.TestCase):
+    def test_reconcile_report_and_findings(self):
+        from collector.reconcile import run_reconcile
+
+        class Mw(FakeMw):
+            def __init__(self, pages):
+                super().__init__(set(), set(), [], [], [])
+                self.pages = pages
+
+            def all_pages(self):
+                return iter(self.pages)
+
+            def get(self, params):
+                return {"query": {"recentchanges": [], "logevents": []}}
+
+        class Rpc(FakeRpc):
+            def call(self, fn, payload):
+                if fn == "reconcile_pages":
+                    if payload["p_after"]:
+                        return []
+                    return [{"page_id": 1, "title": "א"}, {"page_id": 2, "title": "ב ישן"}, {"page_id": 9, "title": "נמחק"}]
+                if fn == "reconcile_record":
+                    self.recorded = payload
+                    return "run-1"
+                return super().call(fn, payload)
+        rpc = Rpc({"wikipedia/delta": "2026-10-05T00:00:00Z"})
+        mws = {"wikipedia": Mw([page(1, "א"), page(2, "ב חדש"), page(3, "חדש")])}
+        report = run_reconcile(mws, rpc, log=lambda *_: None)
+        classes = report["sites"][0]["classes"]
+        self.assertEqual((classes["only_source"]["n"], classes["only_db"]["n"], classes["title"]["n"]), (1, 1, 1))
+        kinds = sorted((f["class"], f["page_id"]) for f in rpc.recorded["p_findings"])
+        self.assertEqual(kinds, [("only_db", 9), ("only_source", 3), ("title", 2)])
+        self.assertEqual(rpc.calls[-1][1]["p_status"], "succeeded")
+
+    def test_empty_snapshot_fails(self):
+        from collector.reconcile import run_reconcile
+
+        class Mw(FakeMw):
+            def all_pages(self):
+                return iter([])
+        rpc = FakeRpc({"wikipedia/delta": "2026-10-05T00:00:00Z"})
+        with self.assertRaises(RuntimeError):
+            run_reconcile({"wikipedia": Mw(set(), set(), [], [], [])}, rpc, log=lambda *_: None)
+        self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
+
+
 if __name__ == "__main__":
     unittest.main()
