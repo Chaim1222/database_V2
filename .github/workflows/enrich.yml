@@ -1,7 +1,9 @@
 name: העשרה
-# ידני כרגע. מריץ את כל קבוצות ההעשרה (redirect, length, desc, created) על דפי ויקיפדיה "חסרים" שטרם נבדקו או התיישנו.
+# מתוזמן (פעיל רק כש-ENABLE_SCHEDULE=true) וגם ידני. מריץ את כל קבוצות ההעשרה (redirect, length, desc, created) על דפי ויקיפדיה "חסרים" שטרם נבדקו או התיישנו.
 # דורש את מיגרציה 0015. אחרי יציבות: schedule לילי.
 on:
+  schedule:
+    - cron: "37 1 * * *"
   workflow_dispatch:
     inputs:
       groups:
@@ -14,6 +16,7 @@ concurrency:
 
 jobs:
   enrich:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:

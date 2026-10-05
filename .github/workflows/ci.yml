@@ -1,0 +1,31 @@
+name: בדיקות
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests
+
+  sql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Postgres 16
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql postgresql-contrib
+          sudo systemctl start postgresql
+      - name: מיגרציות ובדיקות SQL
+        run: |
+          sudo -u postgres createuser --superuser "$USER" || true
+          PGUSER="$USER" PGHOST=/var/run/postgresql db/run_tests.sh

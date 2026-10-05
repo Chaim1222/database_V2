@@ -22,9 +22,9 @@
 	var SUPABASE_URL = BACKENDS[BACKEND_NAME].url;
 	var SUPABASE_ANON_KEY = BACKENDS[BACKEND_NAME].key;
 	var PG_PROFILE = BACKENDS[BACKEND_NAME].profile;   // null = public (v1); 'api' = v2
-	// כתיבה (שיוך ידני, משוב סינון, רענון תחזוקה) נתמכת רק ב-v1 בינתיים
+	// רענון התחזוקה (maintRpc) נתמך רק ב-v1; שיוך ידני ומשוב סינון נתמכים בשני המסדים
 	function assertWritable() {
-		if (PG_PROFILE) throw new Error('הפעולה אינה נתמכת עדיין במסד החדש (v2). אפשר לחזור למסד הישן בפאנל הניהול.');
+		if (PG_PROFILE) throw new Error('הפעולה אינה נתמכת במסד החדש (v2). אפשר לחזור למסד הישן בפאנל הניהול.');
 	}
 	function profileHeaders(h) {
 		if (PG_PROFILE) { h['Accept-Profile'] = PG_PROFILE; h['Content-Profile'] = PG_PROFILE; }
@@ -2609,7 +2609,15 @@
 		var mode = wfMode;
 		var level = m.h ? m[mode] : (wfMethod === 'ctx' && m['c' + mode] != null ? m['c' + mode] : m[mode]);
 		var send = function () {
-			assertWritable();
+			if (PG_PROFILE) {
+				// v2: פונקציות מנהלים בסכמת api (database_V2 מיגרציות 0005, 0019)
+				return fetch(SUPABASE_URL + '/rest/v1/rpc/' + (unmark ? 'unmark_feedback' : 'mark_feedback'), {
+					method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+					body: JSON.stringify(unmark ? { p_wiki_id: Number(id), p_match_key: key } : {
+						p_wiki_id: Number(id), p_match_key: key, p_word: m.x, p_entries: m.e || [], p_label: label, p_topic: m.t || null,
+						p_hidden: m.h || null, p_level: level || null, p_lists_version: d.lists_version || null })
+				});
+			}
 			if (unmark) {
 				var q = new URLSearchParams();
 				q.set('wikipedia_id', 'eq.' + id);
@@ -3127,7 +3135,12 @@
 		// עצמה + מההצעה שנבחרה) - בניגוד לגרסה הישנה, אין כאן שלב חיפוש
 		// נפרד לפני הכתיבה.
 		var postMatch = function () {
-			assertWritable();
+			if (PG_PROFILE) {
+				return fetch(SUPABASE_URL + '/rest/v1/rpc/set_manual_link', {
+					method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+					body: JSON.stringify({ p_mech_id: mechalolId, p_wiki_id: wikipediaId, p_reason: null })
+				});
+			}
 			return fetch(SUPABASE_URL + '/rest/v1/manual_matches', {
 				method: 'POST',
 				headers: authHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
@@ -3170,7 +3183,7 @@
 	var maintPolling = false;
 	function syncMaintRow() {
 		var row = $id('mchl-maint-row');
-		if (row) row.style.display = serviceKeyConnected ? '' : 'none';
+		if (row) row.style.display = serviceKeyConnected && !PG_PROFILE ? '' : 'none';   // רענון תחזוקה: v1 בלבד (ב-v2 הסנכרון והבדיקות הן workflows)
 	}
 	function maintRpc(name) {
 		assertWritable();
@@ -3443,7 +3456,7 @@
 		'<select id="mchl-backend-select" class="mchl-search" style="max-width:220px;">' +
 		Object.keys(BACKENDS).map(function (k) { return '<option value="' + k + '">' + BACKENDS[k].label + '</option>'; }).join('') +
 		'</select>' +
-		'<span class="mchl-muted" style="font-size:12.5px;">הבחירה נשמרת בדפדפן הזה ומרעננת את הדף. במסד החדש (ניסיוני): קריאה בלבד.</span>' +
+		'<span class="mchl-muted" style="font-size:12.5px;">הבחירה נשמרת בדפדפן הזה ומרעננת את הדף. במסד החדש (ניסיוני): שיוך ידני ומשוב סינון נתמכים; רענון תחזוקה לא.</span>' +
 		'</div>' +
 		'<div class="mchl-admin-row" id="mchl-maint-row" style="display:none;margin-top:12px;">' +
 		'<button type="button" class="mchl-export-btn" id="mchl-maint-btn" data-action="maint-refresh">רענן נתוני תחזוקה</button>' +
@@ -3545,8 +3558,22 @@
 			var banner = document.createElement('div');
 			banner.className = 'mchl-muted mchl-alert';
 			banner.style.margin = '8px 0';
-			banner.textContent = 'מוצג מהמסד החדש (v2), גרסת ניסוי בקריאה בלבד. החזרה למסד הישן: ⚙ ניהול ← מסד נתונים.';
+			banner.textContent = 'מוצג מהמסד החדש (v2), גרסת ניסוי. החזרה למסד הישן: ⚙ ניהול ← מסד נתונים.';
 			container.insertBefore(banner, container.firstChild);
+			// שער בריאות: הסנכרון ישן או תקוע (api.v_sync_status.health)
+			fetch(SUPABASE_URL + '/rest/v1/v_sync_status?select=kind,health,last_success_at&kind=eq.sync', { headers: pgHeaders() })
+				.then(function (res) { return res.ok ? res.json() : []; })
+				.then(function (rows) {
+					var h = rows && rows[0];
+					if (!h || h.health === 'ok') return;
+					var warn = document.createElement('div');
+					warn.className = 'mchl-alert';
+					warn.style.margin = '8px 0';
+					warn.textContent = h.health === 'never' ? 'הנתונים טרם סונכרנו.'
+						: h.health === 'stuck' ? 'הסנכרון האחרון נראה תקוע; הנתונים עלולים להיות ישנים.'
+						: 'הנתונים לא עודכנו מאז ' + new Date(h.last_success_at).toLocaleString('he-IL') + '.';
+					container.insertBefore(warn, banner.nextSibling);
+				}).catch(function () { /* אזהרה בלבד */ });
 		}
 		buildTabs();
 		applySiteNav();

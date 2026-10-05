@@ -13,6 +13,7 @@ from .state import is_live
 from .sync import enrich_mech
 
 PAGE = 5000
+V1_TABLES = {"wikipedia": "wikipedia_pages", "mechalol": "mechalol_pages"}
 MAX_FINDINGS_PER_CLASS = 2000
 
 
@@ -33,6 +34,28 @@ def read_db(rpc, site):
         after = rows[-1]["page_id"]
 
 
+def read_v1_titles(env, site, session=None):
+    """{id: title} מ-v1 (קריאה בלבד), להשוואה מול אותו צילום מקור. מחזיר None כשאין פרטי גישה ל-v1."""
+    if not env.get("V1_SUPABASE_URL") or not env.get("V1_SUPABASE_SERVICE_KEY"):
+        return None
+    from .import_v1 import read_v1
+    rows = read_v1(env["V1_SUPABASE_URL"], env["V1_SUPABASE_SERVICE_KEY"], V1_TABLES[site], "id,title", "id", session=session)
+    return {r["id"]: r["title"] for r in rows}
+
+
+def v1_vs_v2(site, src_titles, db_titles, v1_titles):
+    """השוואה משותפת: אותו צילום מקור מול v1 ומול v2, ו-v1 מול v2 (מזהים וכותרות). הבדלים מכוונים מתועדים בדוח ידנית."""
+    v1_src = compare_titles(src_titles, v1_titles)
+    v1_v2 = compare_titles(db_titles, v1_titles)
+    return {"v1_vs_source": {k: len(v) for k, v in v1_src.items()}, "v1_vs_v2": {k: len(v) for k, v in v1_v2.items()},
+            "findings": [{"site": site, "class": "v1_only", "page_id": i, "title": t, "detail": None, "explained_by_window": False}
+                         for i, t in v1_v2["only_db"][:MAX_FINDINGS_PER_CLASS]]
+                        + [{"site": site, "class": "v2_only", "page_id": i, "title": t, "detail": None, "explained_by_window": False}
+                           for i, t in v1_v2["only_source"][:MAX_FINDINGS_PER_CLASS]]
+                        + [{"site": site, "class": "title_v1_vs_v2", "page_id": i, "title": new, "detail": {"v1": old},
+                            "explained_by_window": False} for i, old, new in v1_v2["title"][:MAX_FINDINGS_PER_CLASS]]}
+
+
 def snapshot(site, mw):
     """({id: title}, {id: {field: value}} | {}) מהמקור. כישלון או תוצאה ריקה מפילים את הריצה (אין דוח על צילום חלקי)."""
     live = [p for p in mw.all_pages() if is_live(p)]
@@ -48,7 +71,7 @@ def snapshot(site, mw):
     return titles, fields
 
 
-def run_reconcile(mws, rpc, log=print, skip_mechalol=False):
+def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, session=None):
     started = rpc.call("sync_run_start", {"p_kind": "reconcile"})
     run_id, marks = started["run_id"], started["watermarks"]
     run_key = str(uuid.uuid4())[:8]
@@ -72,6 +95,17 @@ def run_reconcile(mws, rpc, log=print, skip_mechalol=False):
                                         source_titles=src_titles, window=window))
             meta[site] = {"source": len(src_titles), "db": len(db_titles), "window": window}
             findings += _findings(site, diff, changes, ids, titles)
+            v1_titles = read_v1_titles(env, site, session=session)
+            if v1_titles is not None:
+                shared = v1_vs_v2(site, src_titles, db_titles, v1_titles)
+                meta[site]["v1_comparison"] = {k: shared[k] for k in ("v1_vs_source", "v1_vs_v2")}
+                findings += shared["findings"]
+                log(f"{site}: v1 מול מקור {shared['v1_vs_source']}, v1 מול v2 {shared['v1_vs_v2']}")
+        conflicts = rpc.call("match_conflicts", {}) or []
+        for c in conflicts[:MAX_FINDINGS_PER_CLASS * 2]:
+            findings.append({"site": "mechalol", "class": "conflict_" + c["kind"], "page_id": c["mech_id"], "title": c["mech_title"],
+                             "detail": {"wiki_id": c["wiki_id"], "other_wiki_id": c["other_wiki_id"]}, "explained_by_window": False})
+        meta["conflicts"] = {k: sum(1 for c in conflicts if c["kind"] == k) for k in {c["kind"] for c in conflicts}}
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": {}, "p_error": str(exc)[:1000]})
         raise

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .classify import classify
 from .normalize import mech_key_row
 from .state import chunks, resolve
+from .templates import check_and_apply
 
 OVERLAP = timedelta(minutes=10)
 # מנה אחת = קריאה אטומית אחת. פיצול למנות מוותר על האטומיות (והחלפות כותרות בין מנות נראות כמיושנות),
@@ -33,7 +34,7 @@ def enrich_mech(mw, live):
             d.update(wiki_candidate_key=row["wiki_candidate_key"], rules=row["rules"])
 
 
-def sync_site(site, mw, rpc, run_id, since, until):
+def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None):
     """מחזיר סטטיסטיקה. since/until: מחרוזות ISO (UTC)."""
     ids, titles, events = mw.touched(since, until)
     by_id, by_title = mw.info(ids, titles)
@@ -52,6 +53,11 @@ def sync_site(site, mw, rpc, run_id, since, until):
     if events:
         rpc.call("sync_record_events", {"p_events": [{"site": site, **e} for e in events], "p_run": run_id})
     totals["events"] = len(events)
+    if site == "mechalol" and wiki_mw is not None:
+        # המסלול הממוקד של אימות תבניות: ערכי מכלול מיובאים שנערכו או נוצרו בחלון (הכשל מפיל את הריצה, והחלון יישאל שוב)
+        imported = {d["page_id"]: d["title"] for d in live if d.get("status") in ("imported_documented", "imported_undocumented")}
+        if imported:
+            totals["templates"] = check_and_apply(mw, wiki_mw, rpc, imported, list(imported))
     return totals
 
 
@@ -68,7 +74,7 @@ def run_sync(mws, rpc, now=None, overlap=OVERLAP):
             if key not in marks:
                 raise RuntimeError(f"אין נקודת התחלה ל-{key}: נדרשת טעינה ראשונית")
             since = _iso(datetime.fromisoformat(marks[key].replace("Z", "+00:00")) - overlap)
-            stats[site] = sync_site(site, mw, rpc, run_id, since, until)
+            stats[site] = sync_site(site, mw, rpc, run_id, since, until, wiki_mw=mws.get("wikipedia"))
             new_marks[key] = until
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": str(exc)[:1000]})

@@ -121,9 +121,33 @@ class FakeRpc:
             return self.load_start
         if fn == "sync_run_start":
             return {"run_id": "r1", "watermarks": self.marks}
+        if fn == "sync_apply_template_checks":
+            return {"checked": len(payload["p_rows"]), "gap_changed": 0}
         if fn.startswith("sync_apply"):
             return {"live": len(payload["p_live"]), "deleted": len(payload["p_gone_ids"])}
         return None
+
+
+class SyncTemplatesTests(unittest.TestCase):
+    def test_edited_imported_pages_get_template_check(self):
+        from datetime import datetime, timezone
+
+        class Mech(FakeMw):
+            def get(self, params):
+                return {"query": {"pages": [{"pageid": 2, "revisions": [{"revid": 20, "slots": {"main": {"content": "{{מיון ויקיפדיה|דף=יעד}}"}}}]}]}}
+
+        class Wiki(FakeMw):
+            def get(self, params):
+                return {"query": {"pages": [{"title": "יעד", "pageid": 50, "ns": 0}]}}
+        mech = Mech({2}, {"ב"}, [], [page(2, "ב")], [{"title": "ב", "ns": 0, "pageid": 2}], {2: set()})
+        wiki = Wiki({1}, {"א"}, [], [page(1, "א")], [page(1, "א")])
+        rpc = FakeRpc({"wikipedia/delta": "2026-10-05T10:00:00Z", "mechalol/delta": "2026-10-05T10:00:00Z"})
+        stats = run_sync({"wikipedia": wiki, "mechalol": mech}, rpc, now=datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc))
+        check = [c[1] for c in rpc.calls if c[0] == "sync_apply_template_checks"]
+        self.assertEqual(len(check), 1)
+        self.assertEqual(check[0]["p_rows"][0]["outcome"], "ok")
+        self.assertEqual(check[0]["p_rows"][0]["wiki_id"], 50)
+        self.assertIn("templates", stats["mechalol"])
 
 
 class SyncFlowTests(unittest.TestCase):
@@ -476,12 +500,40 @@ class ReconcileTests(unittest.TestCase):
                 return super().call(fn, payload)
         rpc = Rpc({"wikipedia/delta": "2026-10-05T00:00:00Z"})
         mws = {"wikipedia": Mw([page(1, "א"), page(2, "ב חדש"), page(3, "חדש")])}
-        report = run_reconcile(mws, rpc, log=lambda *_: None)
+        report = run_reconcile(mws, rpc, log=lambda *_: None, env={})
         classes = report["sites"][0]["classes"]
         self.assertEqual((classes["only_source"]["n"], classes["only_db"]["n"], classes["title"]["n"]), (1, 1, 1))
         kinds = sorted((f["class"], f["page_id"]) for f in rpc.recorded["p_findings"])
         self.assertEqual(kinds, [("only_db", 9), ("only_source", 3), ("title", 2)])
         self.assertEqual(rpc.calls[-1][1]["p_status"], "succeeded")
+
+    def test_v1_comparison_and_conflicts(self):
+        from collector.reconcile import run_reconcile, v1_vs_v2
+
+        shared = v1_vs_v2("wikipedia", {1: "א", 2: "ב", 3: "ג"}, {1: "א", 2: "ב", 5: "ה"}, {1: "א", 4: "ד", 2: "ב ישן"})
+        self.assertEqual(shared["v1_vs_v2"], {"only_source": 1, "only_db": 1, "title": 1})
+        self.assertEqual(sorted(f["class"] for f in shared["findings"]), ["title_v1_vs_v2", "v1_only", "v2_only"])
+
+        class Mw(FakeMw):
+            def all_pages(self):
+                return iter([page(1, "א")])
+
+            def get(self, params):
+                return {"query": {"recentchanges": [], "logevents": []}}
+
+        class Rpc(FakeRpc):
+            def call(self, fn, payload):
+                if fn == "reconcile_pages":
+                    return [] if payload["p_after"] else [{"page_id": 1, "title": "א"}]
+                if fn == "match_conflicts":
+                    return [{"kind": "template_vs_title", "mech_id": 10, "mech_title": "ערך", "wiki_id": 1, "other_wiki_id": 2}]
+                if fn == "reconcile_record":
+                    self.recorded = payload
+                    return "r"
+                return super().call(fn, payload)
+        rpc = Rpc({"wikipedia/delta": "2026-10-05T00:00:00Z"})
+        run_reconcile({"wikipedia": Mw(set(), set(), [], [], [])}, rpc, log=lambda *_: None, env={})
+        self.assertIn("conflict_template_vs_title", [f["class"] for f in rpc.recorded["p_findings"]])
 
     def test_empty_snapshot_fails(self):
         from collector.reconcile import run_reconcile
@@ -491,7 +543,7 @@ class ReconcileTests(unittest.TestCase):
                 return iter([])
         rpc = FakeRpc({"wikipedia/delta": "2026-10-05T00:00:00Z"})
         with self.assertRaises(RuntimeError):
-            run_reconcile({"wikipedia": Mw(set(), set(), [], [], [])}, rpc, log=lambda *_: None)
+            run_reconcile({"wikipedia": Mw(set(), set(), [], [], [])}, rpc, log=lambda *_: None, env={})
         self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
 
 

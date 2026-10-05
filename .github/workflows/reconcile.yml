@@ -1,7 +1,9 @@
 name: reconcile (דוח השוואה)
-# דוח בלבד: צילום מקור מול המראה, חלון סגור, ממצאים ב-ops.reconcile_finding וסיכום בעמוד הריצה. לא משנה את המראה.
+# דוח בלבד (כולל השוואת v1 מול v2 על אותו צילום, כשקיימים secrets של v1; וסתירות התאמה): צילום מקור מול המראה, חלון סגור, ממצאים ב-ops.reconcile_finding וסיכום בעמוד הריצה. לא משנה את המראה.
 # ידני. דורש מיגרציה 0018 וטעינה ראשונית. צילום המכלול (עם קטגוריות) לוקח כ-40 דקות.
 on:
+  schedule:
+    - cron: "13 3 * * 0"
   workflow_dispatch:
     inputs:
       skip_mechalol:
@@ -15,6 +17,7 @@ concurrency:
 
 jobs:
   reconcile:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
@@ -30,3 +33,5 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          V1_SUPABASE_URL: ${{ secrets.V1_SUPABASE_URL }}
+          V1_SUPABASE_SERVICE_KEY: ${{ secrets.V1_SUPABASE_SERVICE_KEY }}

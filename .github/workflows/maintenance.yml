@@ -1,8 +1,9 @@
-name: סנכרון דלתא
-# מתוזמן (כל שעה, פעיל רק כש-ENABLE_SCHEDULE=true) וגם ידני. תדירות הסנכרון טרם הוכרעה סופית: שעתי כברירת מחדל, בהתאם לסף שער הבריאות (3 שעות).
+name: תחזוקה (שמירת נתונים)
+# מוחק העשרה וסינון של דפים שכבר אינם "חסרים" וישנים מ-90 יום (api.maintenance_prune). פעיל מתוזמן רק כש-ENABLE_SCHEDULE=true.
+# דורש מיגרציה 0019.
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "41 4 * * 0"
   workflow_dispatch:
 
 concurrency:
@@ -10,12 +11,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
+  maintenance:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      PYTHONUNBUFFERED: "1"   # כדי שהלוג יתקדם בזמן אמת
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,7 +22,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m collector.cli sync
+      - run: python -m collector.cli maintenance
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
