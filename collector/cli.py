@@ -1,4 +1,4 @@
-"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance | revcheck   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -18,7 +18,7 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 def main(argv):
     if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"]):
-        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance | revcheck", file=sys.stderr)
+        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck", file=sys.stderr)
         return 2
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     if argv[0] == "maintenance":
@@ -41,7 +41,7 @@ def main(argv):
     elif argv[0] == "revcheck":
         stats = run_revcheck(mws["wikipedia"], rpc)
     elif argv[0] == "reconcile":
-        stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv)["sites"]}}
+        stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv, fix="--fix" in argv)["sites"]}}
     elif argv[0] == "enrich":
         clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"], "wikidata": MediaWiki(WIKIDATA_API)}
         groups = argv[1:] or list(GROUPS)

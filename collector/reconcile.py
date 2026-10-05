@@ -10,11 +10,15 @@ from datetime import datetime, timezone
 from .reconcile_compare import (CLASSIFICATION_FIELDS, collect_window, compare_classification, compare_titles, explain,
                                 render_markdown, summarize_site)
 from .state import is_live
-from .sync import enrich_mech
+from .normalize import mech_key_row
+from .state import chunks
+from .sync import APPLY_FN, enrich_mech
 
 PAGE = 5000
 V1_TABLES = {"wikipedia": "wikipedia_pages", "mechalol": "mechalol_pages"}
 MAX_FINDINGS_PER_CLASS = 2000
+MAX_FIX_RATE = 0.02   # שער תיקון: יותר מ-2% מהמראה שונה = צילום חלקי או שגוי, לא מתקנים
+FIX_FIELDS = ("status", "source_type", "needs_attention", "is_dictionary")
 
 
 def _iso(dt):
@@ -71,7 +75,35 @@ def snapshot(site, mw):
     return titles, fields
 
 
-def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, session=None):
+def fix_classification(rpc, src_titles, src_fields, changes, ids_in_window, titles_in_window, db_count, log=print):
+    """
+    מתקן סיווג (סטטוס, מקור, דף טיפול, מילוני) של ערכי מכלול שהצילום אומר עליהם משהו אחר, ושלא נגעו בהם בחלון (דף שנערך בחלון
+    יטופל בסנכרון הבא). רק סיווג: מזהים וכותרות נשארים לסנכרון. ההחלה דרך אותה פונקציה של הסנכרון, ולכן אידמפוטנטית.
+    status_documented_in_db_only אינו מתוקן: מקורו לא אומת (ייתכן שהוא קידום אמיתי של match.py או הסרת תיעוד; ב-v2 אין match.py).
+    """
+    ids = set()
+    for field, rows in changes.items():
+        if field in FIX_FIELDS:
+            ids.update(i for i, _old, _new in rows)
+    ids = sorted(i for i in ids if i not in ids_in_window and src_titles.get(i) not in titles_in_window)
+    if not ids:
+        return 0
+    if len(ids) > MAX_FIX_RATE * max(db_count, 1):
+        raise RuntimeError(f"{len(ids):,} ערכים לתיקון חורגים משער התיקון ({MAX_FIX_RATE:.0%} מ-{db_count:,}); לא תוקן דבר")
+    for part in chunks(ids, 500):
+        live = []
+        for i in part:
+            row = {"page_id": i, "title": src_titles[i], **{k: src_fields[i][k] for k in FIX_FIELDS}}
+            key = mech_key_row(i, src_titles[i])
+            if key:
+                row.update(wiki_candidate_key=key["wiki_candidate_key"], rules=key["rules"])
+            live.append(row)
+        rpc.call(APPLY_FN["mechalol"], {"p_live": live, "p_gone_ids": [], "p_gone_titles": []})
+    log(f"mechalol: תוקן סיווג ל-{len(ids):,} ערכים")
+    return len(ids)
+
+
+def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, session=None, fix=False):
     started = rpc.call("sync_run_start", {"p_kind": "reconcile"})
     run_id, marks = started["run_id"], started["watermarks"]
     run_key = str(uuid.uuid4())[:8]
@@ -95,6 +127,8 @@ def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, sess
                                         source_titles=src_titles, window=window))
             meta[site] = {"source": len(src_titles), "db": len(db_titles), "window": window}
             findings += _findings(site, diff, changes, ids, titles)
+            if fix and site == "mechalol":
+                meta[site]["fixed_classification"] = fix_classification(rpc, src_titles, src_fields, changes, ids, titles, len(db_titles), log)
             v1_titles = read_v1_titles(env, site, session=session)
             if v1_titles is not None:
                 shared = v1_vs_v2(site, src_titles, db_titles, v1_titles)

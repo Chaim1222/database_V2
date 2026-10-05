@@ -11,6 +11,10 @@ on:
         description: "רק ויקיפדיה"
         type: boolean
         default: false
+      fix:
+        description: "לתקן סיווג של ערכי מכלול שהמקור אומר עליהם משהו אחר (רק סיווג, בשער 2%)"
+        type: boolean
+        default: false
 
 concurrency:
   group: v2-db-write
@@ -30,8 +34,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m collector.cli reconcile ${{ inputs.skip_mechalol && '--skip-mechalol' || '' }}
+      - run: python -m collector.cli reconcile $FLAGS
         env:
+          FLAGS: ${{ inputs.skip_mechalol && '--skip-mechalol' || '' }} ${{ (inputs.fix || github.event_name == 'schedule') && '--fix' || '' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           V1_SUPABASE_URL: ${{ secrets.V1_SUPABASE_URL }}

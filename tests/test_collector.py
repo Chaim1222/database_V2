@@ -715,5 +715,34 @@ class RebuildAndDryRunTests(unittest.TestCase):
         self.assertEqual([(e["kind"], e["page_id"]) for e in events], [("create", 7)])
 
 
+class ReconcileFixTests(unittest.TestCase):
+    def test_fix_classification_only_unexplained_and_gated(self):
+        from collector.reconcile import fix_classification
+
+        class Rpc(FakeRpc):
+            pass
+        src_titles = {1: "א", 2: "ב", 3: "קרבן ג"}
+        src_fields = {i: {"status": "imported_documented", "source_type": "wikipedia_documented", "needs_attention": False, "is_dictionary": False} for i in src_titles}
+        changes = {"status": [(1, "created_in_mech", "imported_documented"), (2, "created_in_mech", "imported_documented"), (3, "x", "imported_documented")],
+                   "status_documented_in_db_only": [(9, "d", "u")]}
+        rpc = Rpc({})
+        # דף 2 נערך בחלון: לא מתקנים; 9 מקורו לא אומת: לא מתקנים
+        n = fix_classification(rpc, src_titles, src_fields, changes, {2}, set(), 1000, log=lambda *_: None)
+        self.assertEqual(n, 2)
+        live = [c for c in rpc.calls if c[0] == "sync_apply_mech_pages"][0][1]["p_live"]
+        self.assertEqual([d["page_id"] for d in live], [1, 3])
+        self.assertEqual(live[1]["wiki_candidate_key"], "קורבן ג")          # גם המפתח הסמנטי מחושב
+        self.assertNotIn("wiki_candidate_key", live[0])
+        # שער: 3 מתוך 100 > 2%
+        with self.assertRaises(RuntimeError):
+            fix_classification(Rpc({}), src_titles, src_fields, changes, set(), set(), 100, log=lambda *_: None)
+
+    def test_nothing_to_fix(self):
+        from collector.reconcile import fix_classification
+        rpc = FakeRpc({})
+        self.assertEqual(fix_classification(rpc, {}, {}, {}, set(), set(), 1000), 0)
+        self.assertEqual(rpc.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
