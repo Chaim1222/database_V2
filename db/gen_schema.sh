@@ -13,6 +13,6 @@ for f in migrations/*.sql; do run "psql -X -q -v ON_ERROR_STOP=1 -d $DB -f '$PWD
 {
   echo "-- נוצר אוטומטית מ-db/migrations (db/gen_schema.sh). אין לערוך ידנית."
   run "pg_dump -d $DB --schema-only --no-owner --no-comments --schema=ref --schema=mirror --schema=derived --schema=enrich --schema=work --schema=ops --schema=api" \
-    | grep -v -E '^(-- Dumped|[\\]restrict|[\\]unrestrict|SET |SELECT pg_catalog.set_config)' | cat -s
+    | grep -v -E '^(-- Dumped|[\\]restrict|[\\]unrestrict|SET |SELECT pg_catalog.set_config)' | sed -E 's/^(ALTER DEFAULT PRIVILEGES) FOR ROLE [A-Za-z0-9_]+ /\1 /' | cat -s   # בלי שם המשתמש שיצר את המסד (שונה בין מחשבים)
 } > schema.sql
 echo "db/schema.sql: $(wc -l < schema.sql) שורות"
