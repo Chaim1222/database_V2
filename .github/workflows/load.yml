@@ -19,6 +19,8 @@ jobs:
     if: ${{ inputs.confirm == 'load' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    env:
+      PYTHONUNBUFFERED: "1"   # כדי שהלוג יתקדם בזמן אמת
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
