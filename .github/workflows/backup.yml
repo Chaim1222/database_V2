@@ -30,7 +30,7 @@ jobs:
           psql "$DB_URL" -At -c "select 'work.manual_link', count(*) from work.manual_link union all select 'work.exclusion', count(*) from work.exclusion union all select 'work.page_lock', count(*) from work.page_lock union all select 'work.scan_feedback', count(*) from work.scan_feedback union all select 'work.admin', count(*) from work.admin" > out/counts.txt
           cat out/counts.txt
           test -s out/work_data.sql
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: v2-work-backup
           path: out/
