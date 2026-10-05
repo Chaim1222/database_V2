@@ -86,15 +86,30 @@ reset role;
 do $$
 declare s1 timestamptz; s2 timestamptz; s3 timestamptz;
 begin
-    s1 := api.sync_load_begin('wikipedia');
+    s1 := api.sync_load_begin('wikipedia', null);
     perform pg_sleep(0.05);
-    s2 := api.sync_load_begin('wikipedia');
+    s2 := api.sync_load_begin('wikipedia', null);
     if s1 <> s2 then raise exception 'failed attempt must keep the original start'; end if;
     perform api.sync_run_finish((api.sync_run_start('rebuild') ->> 'run_id')::uuid, 'succeeded', '{}', null,
                                 jsonb_build_object('wikipedia/delta', s1));
     perform pg_sleep(0.05);
-    s3 := api.sync_load_begin('wikipedia');
+    s3 := api.sync_load_begin('wikipedia', null);
     if s3 <= s1 then raise exception 'a completed load must start a new window'; end if;
+end $$;
+-- 2ב. נקודת התחלה מוצעת (דמפ): מוקדמת מנצחת בניסיון פתוח, ובטעינה חדשה היא נקודת ההתחלה
+do $$
+declare s1 timestamptz; s2 timestamptz; s3 timestamptz;
+begin
+    s1 := api.sync_load_begin('mechalol', '2026-10-01 00:00+00');
+    s2 := api.sync_load_begin('mechalol', '2026-10-03 00:00+00');     -- דמפ חדש יותר באותו ניסיון פתוח
+    if s1 <> s2 or s2 <> '2026-10-01 00:00+00' then raise exception 'open attempt must keep the earlier start: % %', s1, s2; end if;
+    s3 := api.sync_load_begin('mechalol', '2026-09-20 00:00+00');     -- דמפ ישן יותר: מוקדם יותר מכסה יותר
+    if s3 <> '2026-09-20 00:00+00' then raise exception 'earlier proposed start should win: %', s3; end if;
+    perform api.sync_run_finish((api.sync_run_start('rebuild') ->> 'run_id')::uuid, 'succeeded', '{}', null,
+                                jsonb_build_object('mechalol/delta', s3));
+    if api.sync_load_begin('mechalol', '2026-10-05 00:00+00') <> '2026-10-05 00:00+00' then
+        raise exception 'after a completed load the proposed start is used';
+    end if;
 end $$;
 rollback;
 select 'ok t08_review_fixes' as test;

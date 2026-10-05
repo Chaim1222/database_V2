@@ -10,7 +10,19 @@ from .sync import APPLY_FN, enrich_mech
 BATCH = 1000
 
 
-def load_site(site, mw, rpc, log=print):
+class ApiSource:
+    """מקור דפים מ-list=allpages. אין נקודת התחלה מראש: המסד קובע אותה (now) בתחילת הטעינה."""
+    start = None
+
+    def __init__(self, mw):
+        self.mw = mw
+
+    def pages(self):
+        return self.mw.all_pages()
+
+
+def load_site(site, mw, rpc, log=print, source=None):
+    source = source or ApiSource(mw)
     total = 0
     batch = []
 
@@ -26,7 +38,7 @@ def load_site(site, mw, rpc, log=print):
         log(f"{site}: {total:,} ערכים נטענו")
         batch = []
 
-    for page in mw.all_pages():
+    for page in source.pages():
         if is_live(page):
             batch.append(page)
             if len(batch) >= BATCH:
@@ -37,13 +49,16 @@ def load_site(site, mw, rpc, log=print):
     return total
 
 
-def run_initial_load(mws, rpc, log=print):
+def run_initial_load(mws, rpc, log=print, sources=None):
+    """sources: {site: מקור עם start ו-pages()}; אתר בלעדיו נטען מ-API."""
+    sources = sources or {}
     started = rpc.call("sync_run_start", {"p_kind": "rebuild"})
     run_id, marks, stats = started["run_id"], {}, {}
     try:
         for site, mw in mws.items():
-            start = rpc.call("sync_load_begin", {"p_site": site})
-            stats[site] = {"loaded": load_site(site, mw, rpc, log)}
+            source = sources.get(site) or ApiSource(mw)
+            start = rpc.call("sync_load_begin", {"p_site": site, "p_start": source.start})
+            stats[site] = {"loaded": load_site(site, mw, rpc, log, source), "source": type(source).__name__}
             marks[f"{site}/delta"] = start
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": str(exc)[:1000]})

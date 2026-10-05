@@ -6,6 +6,9 @@ on:
       confirm:
         description: 'להקליד load כדי לאשר כתיבה למסד'
         required: true
+      dump_date:
+        description: 'תאריך דמפ ויקיפדיה (YYYYMMDD) לקיבוע בהפעלה חוזרת; ריק = האחרון שהסתיים'
+        required: false
 
 concurrency:
   group: v2-db-write
@@ -25,5 +28,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m collector.cli load
         env:
+          DUMP_DATE: ${{ inputs.dump_date }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

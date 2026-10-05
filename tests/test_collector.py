@@ -217,5 +217,76 @@ class UserAgentTests(unittest.TestCase):
         self.assertNotIn("python-requests", USER_AGENT)
 
 
+STUB = """<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/">
+<page><title>א</title><ns>0</ns><id>1</id><revision><id>11</id><timestamp>2026-09-01T00:00:00Z</timestamp></revision></page>
+<page><title>הפניה</title><ns>0</ns><id>2</id><redirect title="א" /><revision><id>12</id></revision></page>
+<page><title>שיחה:א</title><ns>1</ns><id>3</id><revision><id>13</id></revision></page>
+<page><title>ב</title><ns>0</ns><id>4</id><revision><id>14</id></revision></page>
+</mediawiki>""".encode("utf-8")
+
+
+class DumpTests(unittest.TestCase):
+    def test_stub_parsing_filters_redirects_and_namespaces(self):
+        import io
+        from collector.dump import iter_stub_pages
+        self.assertEqual(list(iter_stub_pages(io.BytesIO(STUB))), [(1, "א", 11), (4, "ב", 14)])
+
+    def test_find_latest_dump_skips_unfinished(self):
+        import json
+        from collector.dump import find_latest_dump
+        pages = {
+            "https://dumps.wikimedia.org/hewiki/": '<a href="20260920/">x</a><a href="20261001/">y</a><a href="latest/">z</a>',
+            "https://dumps.wikimedia.org/hewiki/20261001/dumpstatus.json": json.dumps({"jobs": {"stubmetacurrentdump": {"status": "in-progress"}}}),
+            "https://dumps.wikimedia.org/hewiki/20260920/dumpstatus.json": json.dumps({"jobs": {"stubmetacurrentdump": {"status": "done"}}}),
+        }
+        date, url = find_latest_dump(pages.__getitem__)
+        self.assertEqual(date, "20260920")
+        self.assertTrue(url.endswith("/20260920/hewiki-20260920-stub-meta-current.xml.gz"))
+
+    def test_start_is_before_the_dump_day(self):
+        from collector.dump import start_of
+        self.assertEqual(start_of("20261001"), "2026-09-30T23:00:00Z")
+
+    def test_too_small_dump_is_rejected(self):
+        import gzip
+        import io
+        from collector.dump import DumpSource
+
+        class Resp:
+            def __init__(self, data):
+                self.raw = io.BytesIO(data)
+                self.text = ""
+
+            def raise_for_status(self):
+                pass
+
+        class Sess:
+            headers = {}
+
+            def get(self, url, **kw):
+                return Resp(gzip.compress(STUB))
+
+        src = DumpSource(session=Sess(), date="20261001")
+        with self.assertRaises(RuntimeError):
+            list(src.pages())
+
+    def test_load_uses_dump_start_and_dump_pages(self):
+        from collector import initial_load as il
+
+        class Src:
+            start = "2026-09-30T23:00:00Z"
+
+            def pages(self):
+                yield page(1, "א")
+                yield page(4, "ב")
+
+        rpc = FakeRpc({}, load_start="2026-09-30T23:00:00+00:00")
+        il.run_initial_load({"wikipedia": FakeMw(set(), set(), [], [], [])}, rpc, log=lambda *_: None, sources={"wikipedia": Src()})
+        begin = [c for c in rpc.calls if c[0] == "sync_load_begin"][0][1]
+        self.assertEqual(begin, {"p_site": "wikipedia", "p_start": "2026-09-30T23:00:00Z"})
+        applied = [c[1] for c in rpc.calls if c[0] == "sync_apply_wiki_pages"][0]["p_live"]
+        self.assertEqual([d["page_id"] for d in applied], [1, 4])
+
+
 if __name__ == "__main__":
     unittest.main()
