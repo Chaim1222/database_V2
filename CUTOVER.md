@@ -8,13 +8,13 @@
 3. `0012_template_check.sql` (אימות תבניות).
 4. `0013_health.sql` (שער בריאות).
 5. `0014_v1_compat_views.sql` (views בשמות v1 לגאדג'ט).
-   המשך (לפי הסדר): `0015_enrichment.sql`, `0016_scan_io.sql`, `0017_human_data_import.sql`, `0018_reconcile_io.sql`, `0019`, `0020`, `0021`, `0022_rev_tasks_and_locks.sql`. כולן בעורך ה-SQL; 0016 מחליפה את `report_missing_word_filter` שב-0014. אחרי ההחלה: Settings, API, Exposed schemas: `api` מסומן (כבר).
+   המשך (לפי הסדר): `0015_enrichment.sql`, `0016_scan_io.sql`, `0017_human_data_import.sql`, `0018_reconcile_io.sql`, `0019`, `0020`, `0021`, `0022_rev_tasks_and_locks.sql`, `0023_locks_probe.sql`. כולן בעורך ה-SQL; 0016 מחליפה את `report_missing_word_filter` שב-0014. אחרי ההחלה: Settings, API, Exposed schemas: `api` מסומן (כבר).
 6. בדיקה: `select count(*) from api.report_missing_from_mechalol;` מחזיר מספר, ו-`select * from api.sync_watermarks;` מחזיר שורות.
 
 ## ב. Actions (ריפו database_V2)
 1. הרצה ידנית של **סנכרון דלתא** (`sync.yml`). קריטריון: מצליח, ו-`api.v_sync_status` מציג `ok`.
 2. הרצה ידנית של **אימות תבניות** (`templates.yml`), כמה עשרות דקות. ניתן להפסיק ולהמשיך.
-3. **העשרה** (`enrich.yml`), ואז **סינון** (ב-**ריפו הישן**: `word_filter_scan_v2.yml`, דורש secrets `V2_SUPABASE_URL` ו-`V2_SUPABASE_SERVICE_KEY` שם, והמיזוג של הענף ל-main כדי שיהיה ניתן להפעלה).
+3. **העשרה** (`enrich.yml`; כוללת עכשיו גם זיהוי נעילות ליצירה), ואז **סינון** (ב-**ריפו הישן**: `word_filter_scan_v2.yml`, דורש secrets `V2_SUPABASE_URL` ו-`V2_SUPABASE_SERVICE_KEY` שם, והמיזוג של הענף ל-main כדי שיהיה ניתן להפעלה).
 4. **העברת נתוני אדם** (`import_v1.yml`): קודם dry_run; דורש secrets `V1_SUPABASE_URL`, `V1_SUPABASE_SERVICE_KEY`, `V2_ADMIN_UID` (אחרי יצירת חשבון המנהל ב-Authentication של v2).
 5. **בדיקת גרסאות** (`revcheck.yml`, אחרי שאימות התבניות הסתיים; כ-40 דקות): ממלאת את שלושת טאבי הגרסה.
 6. **reconcile** (`reconcile.yml`) כדי לאמת שהמסד תואם למקור.
