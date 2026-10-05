@@ -34,7 +34,7 @@ def enrich_mech(mw, live):
             d.update(wiki_candidate_key=row["wiki_candidate_key"], rules=row["rules"])
 
 
-def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None):
+def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None, dry_run=False):
     """מחזיר סטטיסטיקה. since/until: מחרוזות ISO (UTC)."""
     ids, titles, events = mw.touched(since, until)
     by_id, by_title = mw.info(ids, titles)
@@ -43,6 +43,8 @@ def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None):
         enrich_mech(mw, live)
     totals = {"touched_ids": len(ids), "touched_titles": len(titles), "live": len(live),
               "gone_ids": len(gone_ids), "gone_titles": len(gone_titles)}
+    if dry_run:   # רק איסוף ושאילתת מצב: לא כותבים כלום
+        return {**totals, "dry_run": True}
     parts = list(chunks(live, APPLY_CHUNK)) or [[]]
     for n, part in enumerate(parts):
         result = rpc.call(APPLY_FN[site], {"p_live": part,
@@ -61,7 +63,7 @@ def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None):
     return totals
 
 
-def run_sync(mws, rpc, now=None, overlap=OVERLAP):
+def run_sync(mws, rpc, now=None, overlap=OVERLAP, dry_run=False):
     """mws: {"wikipedia": MediaWiki, "mechalol": MediaWiki}. נכשל בלי נקודת התחלה (נדרשת טעינה ראשונית)."""
     now = now or datetime.now(timezone.utc)
     started = rpc.call("sync_run_start", {"p_kind": "sync"})
@@ -74,10 +76,13 @@ def run_sync(mws, rpc, now=None, overlap=OVERLAP):
             if key not in marks:
                 raise RuntimeError(f"אין נקודת התחלה ל-{key}: נדרשת טעינה ראשונית")
             since = _iso(datetime.fromisoformat(marks[key].replace("Z", "+00:00")) - overlap)
-            stats[site] = sync_site(site, mw, rpc, run_id, since, until, wiki_mw=mws.get("wikipedia"))
+            stats[site] = sync_site(site, mw, rpc, run_id, since, until, wiki_mw=mws.get("wikipedia"), dry_run=dry_run)
             new_marks[key] = until
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": str(exc)[:1000]})
         raise
+    if dry_run:   # הריצה נרשמת כמבוטלת ונקודות ההתקדמות לא זזות
+        rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "cancelled", "p_stats": stats, "p_error": "dry run"})
+        return stats
     rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded", "p_stats": stats, "p_watermarks": new_marks})
     return stats

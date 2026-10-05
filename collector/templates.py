@@ -67,8 +67,17 @@ def clean_title(raw):
     return re.sub(r"\s+", " ", value).strip() or None
 
 
-def referenced_title(text):
-    """הכותרת שב-`דף=` בתבנית האחרונה בטקסט, או None (אין תבנית, לא נסגרת, או אין דף=)."""
+def parse_rev(raw):
+    """מספר גרסה תקין (גדול מ-1; 1 היא גרסת העמוד הראשי), או None (ריק, 0, 1, לא מספרי)."""
+    value = (raw or "").strip()
+    if not re.fullmatch(r"\d+", value):
+        return None
+    number = int(value)
+    return number if number > 1 else None
+
+
+def parse_template(text):
+    """{"title", "rev"} לתבנית האחרונה בטקסט, או None כשאין תבנית (או שאינה נסגרת)."""
     if not text:
         return None
     for start in reversed([m.end() for m in TEMPLATE_START_RE.finditer(text)]):
@@ -80,8 +89,14 @@ def referenced_title(text):
             if "=" in param:
                 key, _, value = param.partition("=")
                 values.setdefault(key.strip(), value)
-        return clean_title(values["דף"]) if "דף" in values else None
+        return {"title": clean_title(values["דף"]) if "דף" in values else None, "rev": parse_rev(values.get("גרסה"))}
     return None
+
+
+def referenced_title(text):
+    """הכותרת שב-`דף=` בתבנית האחרונה בטקסט, או None (אין תבנית, לא נסגרת, או אין דף=)."""
+    parsed = parse_template(text)
+    return parsed["title"] if parsed else None
 
 
 def fetch_contents(mw, page_ids):
@@ -146,8 +161,10 @@ def check_pages(mech_mw, wiki_mw, titles_by_id, page_ids):
         if item == "denied":
             rows.append({"mech_id": mech_id, "outcome": "denied"})
             continue
-        ref = referenced_title(item["content"])
-        row = {"mech_id": mech_id, "rev_id": item["rev_id"]}
+        parsed = parse_template(item["content"]) or {"title": None, "rev": None}
+        ref = parsed["title"]
+        # template_rev: 0 = אין גרסה תקינה (לבדיקת הגרסאות: גרסה שגויה); template_title: `דף=` כפי שנקרא
+        row = {"mech_id": mech_id, "rev_id": item["rev_id"], "template_rev": parsed["rev"] or 0, "template_title": ref}
         if not ref:
             rows.append({**row, "outcome": "none"})
         elif title_key(ref) == title_key(titles_by_id[mech_id]):

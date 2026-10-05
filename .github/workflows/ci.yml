@@ -42,3 +42,7 @@ jobs:
         run: |
           sudo -u postgres createuser --superuser "$USER" || true
           PGUSER="$USER" PGHOST=/var/run/postgresql db/run_tests.sh
+      - name: db/schema.sql מעודכן (נוצר מהמיגרציות)
+        run: |
+          PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
+          git diff --exit-code db/schema.sql

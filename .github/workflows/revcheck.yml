@@ -1,0 +1,30 @@
+name: בדיקת גרסאות (חודשי)
+# משימות גרסה (הפכו להפניה / גרסה שגויה / נמחקו לפי גרסה): collector/revcheck.py. דורש מיגרציה 0022 ושאימות התבניות (templates.yml)
+# רץ קודם (הוא קורא את `גרסה=`). סריקה מלאה כ-40 דקות. מתוזמן רק כש-ENABLE_SCHEDULE=true.
+on:
+  schedule:
+    - cron: "37 3 5 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  revcheck:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m collector.cli revcheck
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

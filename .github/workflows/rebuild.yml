@@ -1,0 +1,32 @@
+name: rebuild (שחזור אסון)
+# טעינה מלאה מהמקורות (API, צילום עדכני) ומחיקת שורות מיושנות, בשער מחיקה של 1%. לשחזור אחרי תקלה או שינוי כללי נרמול; נבדק ברבעון.
+# ידני בלבד, דורש הקלדת "rebuild". אין בו TRUNCATE: המראה מתעדכנת במקום. מכסה כשעה (המכלול כולל קטגוריות).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'להקליד rebuild כדי לאשר כתיבה למסד'
+        required: true
+
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    if: ${{ inputs.confirm == 'rebuild' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m collector.cli rebuild
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

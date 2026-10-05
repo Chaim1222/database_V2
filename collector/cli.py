@@ -1,4 +1,4 @@
-"""python -m collector.cli sync | load | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance | revcheck   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -9,6 +9,7 @@ from .dump import DumpSource
 from .enrich import GROUPS, WIKIDATA_API, run_group
 from .initial_load import run_initial_load
 from .reconcile import run_reconcile
+from .revcheck import run_revcheck
 from .sync import run_sync
 from .templates import run_pending
 
@@ -16,8 +17,8 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 
 def main(argv):
-    if argv[:1] not in (["sync"], ["load"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"]):
-        print("שימוש: python -m collector.cli sync | load | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"]):
+        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] | maintenance | revcheck", file=sys.stderr)
         return 2
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     if argv[0] == "maintenance":
@@ -35,7 +36,9 @@ def main(argv):
         return 1 if problems else 0
     mws = {site: MediaWiki(url) for site, url in APIS.items()}
     if argv[0] == "sync":
-        stats = run_sync(mws, rpc)
+        stats = run_sync(mws, rpc, dry_run="--dry-run" in argv)
+    elif argv[0] == "revcheck":
+        stats = run_revcheck(mws["wikipedia"], rpc)
     elif argv[0] == "reconcile":
         stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv)["sites"]}}
     elif argv[0] == "enrich":
@@ -44,13 +47,14 @@ def main(argv):
         stats = {g: run_group(g, clients, rpc) for g in groups}
     elif argv[0] == "templates":
         stats = {"checked": run_pending(mws["mechalol"], mws["wikipedia"], rpc)}
-    else:
+    else:   # load | rebuild
         # ויקיפדיה מדמפ (מהיר ועקבי); המכלול מה-API. --api לטעינת ויקיפדיה גם היא מה-API. DUMP_DATE (YYYYMMDD) מקבע דמפ.
-        sources = {} if "--api" in argv else {
+        # rebuild חייב צילום עדכני (API): דמפ ישן היה מסמן דפים חדשים כמיושנים וגורם למחיקתם
+        sources = {} if ("--api" in argv or argv[0] == "rebuild") else {
             "wikipedia": DumpSource(user_agent=USER_AGENT, date=os.environ.get("DUMP_DATE") or None)}
         if "wikipedia" in sources:
             print(f"דמפ ויקיפדיה: {sources['wikipedia'].date} ({sources['wikipedia'].url})")
-        stats = run_initial_load(mws, rpc, sources=sources)
+        stats = run_initial_load(mws, rpc, sources=sources, prune=argv[0] == "rebuild")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
 

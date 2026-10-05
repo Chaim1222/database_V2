@@ -547,5 +547,115 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
 
 
+class RevCheckTests(unittest.TestCase):
+    def test_parse_template_rev(self):
+        from collector.templates import parse_template
+        self.assertEqual(parse_template("{{מיון ויקיפדיה|דף=א|גרסה=12345}}"), {"title": "א", "rev": 12345})
+        self.assertIsNone(parse_template("{{מיון ויקיפדיה|דף=א|גרסה=1}}")["rev"])
+        self.assertIsNone(parse_template("{{מיון ויקיפדיה|דף=א|גרסה=0}}")["rev"])
+        self.assertIsNone(parse_template("{{מיון ויקיפדיה|דף=א}}")["rev"])
+
+    def test_decide_rules(self):
+        from collector.revcheck import decide
+        live = {"page_id": 5, "title": "ב", "ns": 0, "redirect": False}
+        redirect = {"page_id": 6, "title": "הפניה", "ns": 0, "redirect": True}
+        self.assertEqual(decide({"template_rev": 0}, None, 100, None)[0], "bad_rev")
+        self.assertEqual(decide({"template_rev": 500}, None, 100, None)[0], "bad_rev")          # גדולה מהאחרונה
+        self.assertEqual(decide({"template_rev": 50}, None, 100, None)[0], "deleted_by_rev")    # נמחקה
+        self.assertEqual(decide({"template_rev": 50}, {**live, "ns": 2}, 100, None)[0], "bad_rev")
+        self.assertEqual(decide({"template_rev": 50, "template_title": "א"}, live, 100, None)[0], None)   # דף חי (גם בשם אחר)
+        self.assertEqual(decide({"template_rev": 50, "template_title": "א"}, redirect, 100, "יעד")[0], "redirect")
+        # יעד ההפניה כבר שם התבנית (גם עם הרב): טופל
+        self.assertEqual(decide({"template_rev": 50, "template_title": "יצחק כהן"}, redirect, 100, "הרב יצחק כהן")[0], None)
+
+    def test_check_rows_and_run(self):
+        from collector.revcheck import check_rows, run_revcheck
+
+        class Wiki:
+            def get(self, params):
+                if "revids" in params:
+                    pages = [{"pageid": 5, "title": "חי", "ns": 0, "revisions": [{"revid": 50}]},
+                             {"pageid": 6, "title": "הפניה", "ns": 0, "redirect": True, "revisions": [{"revid": 60}]}]
+                    return {"query": {"pages": pages}}
+                if "titles" in params:
+                    return {"query": {"redirects": [{"from": "הפניה", "to": "יעד אחר"}]}}
+                return {"query": {"recentchanges": [{"revid": 1000}]}}
+        rows = [{"mech_id": 1, "template_rev": 50, "template_title": "חי"}, {"mech_id": 2, "template_rev": 60, "template_title": "משהו"},
+                {"mech_id": 3, "template_rev": 0}, {"mech_id": 4, "template_rev": 70, "template_title": "x"}]
+        found = {f["mech_id"]: f["rev_task"] for f in check_rows(Wiki(), rows, 1000)}
+        self.assertEqual(found, {2: "redirect", 3: "bad_rev", 4: "deleted_by_rev"})
+
+        class Rpc:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, fn, payload):
+                self.calls.append((fn, payload))
+                if fn == "rev_scope":
+                    return rows if payload["p_after"] == 0 else []
+        rpc = Rpc()
+        stats = run_revcheck(Wiki(), rpc, log=lambda *_: None)
+        self.assertEqual(stats, {"scanned": 4, "findings": 3})
+        applied = [c for c in rpc.calls if c[0] == "sync_apply_rev_checks"][0][1]
+        self.assertEqual(applied["p_scope_ids"], [1, 2, 3, 4])
+
+
+class RebuildAndDryRunTests(unittest.TestCase):
+    def test_prune_stale_gate_and_apply(self):
+        from collector import initial_load as il
+
+        class Rpc(FakeRpc):
+            def call(self, fn, payload):
+                if fn == "reconcile_pages":
+                    return [] if payload["p_after"] else [{"page_id": i, "title": str(i)} for i in range(1, 201)]
+                return super().call(fn, payload)
+        rpc = Rpc({})
+        self.assertEqual(il.prune_stale("wikipedia", rpc, set(range(1, 199)), log=lambda *_: None), 2)   # 1% בדיוק מותר
+        applied = [c[1] for c in rpc.calls if c[0] == "sync_apply_wiki_pages"]
+        self.assertEqual(applied, [{"p_live": [], "p_gone_ids": [199, 200], "p_gone_titles": []}])
+        rpc2 = Rpc({})
+        with self.assertRaises(RuntimeError):
+            il.prune_stale("wikipedia", rpc2, set(range(1, 100)), log=lambda *_: None)    # חצי נעלם: שער המחיקה
+        self.assertFalse([c for c in rpc2.calls if c[0].startswith("sync_apply")])
+
+    def test_dry_run_writes_nothing(self):
+        from datetime import datetime, timezone
+        marks = {"wikipedia/delta": "2026-10-05T10:00:00Z", "mechalol/delta": "2026-10-05T10:00:00Z"}
+        rpc = FakeRpc(marks)
+        mws = {"wikipedia": FakeMw({1}, {"א"}, [{"kind": "move", "page_id": 1, "title": "א", "new_title": "ב", "ts": "t"}],
+                                   [page(1, "א")], [page(1, "א")]),
+               "mechalol": FakeMw(set(), set(), [], [], [])}
+        stats = run_sync(mws, rpc, now=datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc), dry_run=True)
+        self.assertTrue(stats["wikipedia"]["dry_run"])
+        names = [c[0] for c in rpc.calls]
+        self.assertFalse([n for n in names if n.startswith("sync_apply") or n == "sync_record_events"])
+        finish = rpc.calls[-1][1]
+        self.assertEqual(finish["p_status"], "cancelled")
+        self.assertNotIn("p_watermarks", finish)
+
+    def test_create_events_from_recentchanges(self):
+        from collector.mw import MediaWiki
+
+        class Sess:
+            headers = {}
+
+            def get(self, url, params=None, timeout=None):
+                class R:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self_inner):
+                        if params.get("list") == "recentchanges":
+                            return {"query": {"recentchanges": [{"type": "new", "pageid": 7, "title": "חדש", "timestamp": "2026-10-05T11:00:00Z"},
+                                                                {"type": "edit", "pageid": 8, "title": "עריכה", "timestamp": "2026-10-05T11:01:00Z"}]}}
+                        return {"query": {"logevents": []}}
+                return R()
+        ids, titles, events = MediaWiki("https://x/api.php", session=Sess()).touched("2026-10-05T10:00:00Z", "2026-10-05T12:00:00Z")
+        self.assertEqual(ids, {7, 8})
+        self.assertEqual([(e["kind"], e["page_id"]) for e in events], [("create", 7)])
+
+
 if __name__ == "__main__":
     unittest.main()

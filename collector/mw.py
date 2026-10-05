@@ -61,6 +61,8 @@ class MediaWiki:
             if e.get("pageid"):
                 ids.add(e["pageid"])
             titles.add(e["title"])
+            if e.get("type") == "new":
+                events.append({"kind": "create", "page_id": e.get("pageid") or 0, "title": e["title"], "new_title": None, "ts": e["timestamp"]})
         for log_type in ("move", "delete"):
             le = {"action": "query", "list": "logevents", "letype": log_type, "ledir": "newer",
                   "lestart": since, "leend": until, "leprop": "ids|title|type|details|timestamp", "lelimit": 500}

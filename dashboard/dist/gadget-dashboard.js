@@ -169,7 +169,7 @@ var YES_NO = [{ value: 'true', label: 'כן' }, { value: 'false', label: 'לא' 
 
 var TAB_GROUPS = [
 	{ key: 'import', label: 'ייבוא', tabs: ['missing', 'missing_redirect', 'rav'] },
-	{ key: 'maint', label: 'תחזוקה', tabs: ['undoc', 'template', 'moved', 'locked'] },
+	{ key: 'maint', label: 'תחזוקה', tabs: ['undoc', 'template', 'moved', 'locked', 'redirect', 'badrev', 'deletedrev'] },
 	{ key: 'stats', label: 'מערכת', tabs: ['stats', 'system'] }
 ];
 
@@ -214,6 +214,19 @@ var TABS = {
 		columns: [{ key: 'title', label: 'כותרת' }, { key: 'level', label: 'סוג נעילה' }, { key: 'detected_by', label: 'זוהה על ידי' }, { key: 'detected_at', label: 'זוהה' }],
 		filters: [{ key: 'level', label: 'סוג נעילה', options: [{ value: 'read', label: 'קריאה' }, { value: 'read-semi', label: 'קריאה (חלקית)' }, { value: 'create', label: 'יצירה' }] }],
 		actions: [], rowKey: function (r) { return r.site + '-' + r.page_id + '-' + r.title; }
+	},
+	// משימות גרסה (N7): view אחד, ארבעה טאבים לפי rev_task (collector/revcheck.py; הכללים בהערת המודול)
+	redirect: {
+		label: 'הפכו להפניה', view: 'v_rev_tasks', order: 'title.asc,id.asc', mech: true, baseFilters: [['rev_task', 'eq.redirect']],
+		columns: [{ key: 'title', label: 'כותרת' }, { key: 'rev_page_title', label: 'הפניה בוויקיפדיה' }, { key: 'rev_id', label: 'גרסה' }, { key: 'linked_title', label: 'מקושר אל' }], filters: [], actions: []
+	},
+	badrev: {
+		label: 'גרסה שגויה', view: 'v_rev_tasks', order: 'title.asc,id.asc', mech: true, baseFilters: [['rev_task', 'eq.bad_rev']],
+		columns: [{ key: 'title', label: 'כותרת' }, { key: 'rev_id', label: 'גרסה בתבנית' }, { key: 'rev_page_title', label: 'דף הגרסה' }, { key: 'linked_title', label: 'מקושר אל' }], filters: [], actions: []
+	},
+	deletedrev: {
+		label: 'נמחקו לפי גרסה', view: 'v_rev_tasks', order: 'title.asc,id.asc', mech: true, baseFilters: [['rev_task', 'eq.deleted_by_rev']],
+		columns: [{ key: 'title', label: 'כותרת' }, { key: 'rev_id', label: 'גרסה בתבנית' }, { key: 'linked_title', label: 'מקושר אל' }], filters: [], actions: []
 	},
 	stats: { label: 'סטטיסטיקה', special: 'stats' },
 	system: { label: 'מצב המערכת', special: 'system' }
