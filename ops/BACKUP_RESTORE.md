@@ -22,3 +22,8 @@ pg_dump "$DB_URL" --schema=work --data-only --no-owner -f work_backup.sql
 6. לרשום את תאריך הבדיקה ותוצאתה בראש הקובץ הזה.
 
 סטטוס: **הנוהל נבדק בהדמיה מקומית** (`ops/restore_rehearsal.sh`: מסד עם נתוני דוגמה, גיבוי, שחזור למסד חדש, השוואת ספירות ו-`api.is_admin`; ההדמיה תפסה שגיאה בנוהל הראשון). **בדיקת שחזור מגיבוי הייצור האמיתי: טרם בוצעה.**
+
+## גיבוי אוטומטי (backup.yml)
+workflow שבועי ("גיבוי החלטות אדם") שומר כ-artifact (30 יום): `work_data.sql` (סכמת work, נתונים בלבד), `admins.csv` (מנהלים: מזהה, אימייל, תאריך) ו-`counts.txt` (ספירות לבדיקה).
+**בלי סיסמאות:** `auth.users` לא נשמר. בשחזור מקימים את חשבונות המנהלים מחדש ב-Authentication ורושמים את המזהים החדשים ב-`work.admin` לפי `admins.csv`; שורות `work.manual_link.created_by` ו-`work.scan_feedback.user_id` של מנהל שהוקם מחדש צריכות מיפוי (UPDATE) למזהה החדש.
+דורש secret `V2_DB_URL` (מחרוזת החיבור של סופרבייס, Session pooler). הדמיית השחזור (`ops/restore_rehearsal.sh`) עדיין מדמה גם את `auth.users`; בדיקת שחזור מ-artifact אמיתי: טרם בוצעה.

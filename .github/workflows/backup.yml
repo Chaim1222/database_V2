@@ -1,0 +1,37 @@
+name: "גיבוי החלטות אדם (שבועי)"
+# גיבוי לוגי של מה שאי אפשר לבנות מחדש: סכמת work (שיוכים, החרגות, נעילות, משובי סינון, מנהלים) ורשימת המנהלים עם האימייל שלהם.
+# שאר הנתונים נבנים מהמקורות (טעינה ראשונה / rebuild). נשמר כ-artifact ל-30 יום. בלי סיסמאות: טבלת auth.users לא נשמרת.
+# דורש secret V2_DB_URL (Supabase, Project Settings, Database, Connection string, "Session pooler", עם הסיסמה).
+# מתוזמן רק כש-ENABLE_SCHEDULE=true. נוהל השחזור: ops/BACKUP_RESTORE.md
+on:
+  schedule:
+    - cron: "11 5 * * 0"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: התקנת לקוח Postgres 17
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-client-17 || sudo apt-get install -y -q postgresql-client
+      - name: גיבוי
+        env:
+          DB_URL: ${{ secrets.V2_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$DB_URL" || { echo "חסר secret V2_DB_URL"; exit 1; }
+          mkdir out
+          pg_dump "$DB_URL" --schema=work --data-only --no-owner -f out/work_data.sql
+          psql "$DB_URL" -c "\copy (select a.user_id, u.email, a.added_at from work.admin a join auth.users u on u.id = a.user_id order by a.added_at) to 'out/admins.csv' csv header"
+          psql "$DB_URL" -At -c "select 'work.manual_link', count(*) from work.manual_link union all select 'work.exclusion', count(*) from work.exclusion union all select 'work.page_lock', count(*) from work.page_lock union all select 'work.scan_feedback', count(*) from work.scan_feedback union all select 'work.admin', count(*) from work.admin" > out/counts.txt
+          cat out/counts.txt
+          test -s out/work_data.sql
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v2-work-backup
+          path: out/
+          retention-days: 30
