@@ -11,7 +11,7 @@ on:
         default: true
 
 concurrency:
-  group: v2-db-write
+  group: v2-import   # נפרד מהנעילה הכללית: כותב רק נתוני אדם (אידמפוטנטי), ואחרת תור הסנכרון השעתי היה דוחק אותו
   cancel-in-progress: false
 
 jobs:
