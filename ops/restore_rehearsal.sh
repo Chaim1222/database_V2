@@ -6,9 +6,9 @@ cd "$(dirname "$0")/../db"
 SRC="v2_rehearse_src_$$"; DST="v2_rehearse_dst_$$"
 if [ "$(id -u)" = "0" ] && [ -z "${PGUSER:-}" ]; then RUN=(su postgres -c); else RUN=(bash -c); fi
 run() { "${RUN[@]}" "$1"; }
-cleanup() { run "psql -X -q -c 'drop database if exists $SRC'" >/dev/null 2>&1 || true; run "psql -X -q -c 'drop database if exists $DST'" >/dev/null 2>&1 || true; }
+cleanup() { run "psql -X -q -d postgres -c 'drop database if exists $SRC'" >/dev/null 2>&1 || true; run "psql -X -q -d postgres -c 'drop database if exists $DST'" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-build() { run "psql -X -q -c 'create database $1'" >/dev/null; run "psql -X -q -v ON_ERROR_STOP=1 -d $1 -f '$PWD/tests/00_supabase_stub.sql'"; for f in migrations/*.sql; do run "psql -X -q -v ON_ERROR_STOP=1 -d $1 -f '$PWD/$f'" >/dev/null; done; }
+build() { run "psql -X -q -d postgres -c 'create database $1'" >/dev/null; run "psql -X -q -v ON_ERROR_STOP=1 -d $1 -f '$PWD/tests/00_supabase_stub.sql'"; for f in migrations/*.sql; do run "psql -X -q -v ON_ERROR_STOP=1 -d $1 -f '$PWD/$f'" >/dev/null; done; }
 build "$SRC"; build "$DST"
 run "psql -X -q -v ON_ERROR_STOP=1 -d $SRC" <<'SQL'
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000a1');
