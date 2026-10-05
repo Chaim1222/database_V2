@@ -125,6 +125,7 @@ declare
     v_n integer;
     v_bad jsonb;
 begin
+    perform set_config('mchl.skip_counts', 'on', true);   -- הטריגרים של שיוך/החרגה לא מרעננים ספירות לכל שורה (7 שניות); הקולט מרענן פעם אחת בסוף
     if p_admin is null or not exists (select 1 from auth.users u where u.id = p_admin) then
         raise exception 'p_admin must be an existing auth user' using errcode = '22023';
     end if;
@@ -1090,7 +1091,9 @@ CREATE FUNCTION work.after_exclusion_change() RETURNS trigger
     SET search_path TO ''
     AS $$
 begin
-    perform ops.refresh_counts();
+    if coalesce(current_setting('mchl.skip_counts', true), '') <> 'on' then
+        perform ops.refresh_counts();
+    end if;
     return null;
 end;
 $$;
@@ -1107,7 +1110,9 @@ begin
     perform derived.refresh_wiki_gap(array_remove(array[
         case when tg_op <> 'INSERT' then old.wiki_id end,
         case when tg_op <> 'DELETE' then new.wiki_id end], null));
-    perform ops.refresh_counts();
+    if coalesce(current_setting('mchl.skip_counts', true), '') <> 'on' then
+        perform ops.refresh_counts();
+    end if;
     return null;
 end;
 $$;
