@@ -66,20 +66,6 @@ begin
 end;
 $$;
 
-create or replace function api.remove_manual_link(p_mech_id bigint)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-    if not api.is_admin() then
-        raise exception 'not allowed' using errcode = '42501';
-    end if;
-    delete from work.manual_link where mech_id = p_mech_id;
-end;
-$$;
-
 create or replace function api.add_exclusion(p_kind text, p_wiki_id bigint, p_title text, p_reason text default null)
 returns void
 language plpgsql
@@ -114,13 +100,18 @@ begin
 end;
 $$;
 
-revoke all on function api.is_admin(), api.set_manual_link(bigint, bigint, text), api.remove_manual_link(bigint),
+revoke all on function api.is_admin(), api.set_manual_link(bigint, bigint, text),
     api.add_exclusion(text, bigint, text, text),
     api.mark_feedback(bigint, text, text, text[], text, text, text, text, text) from public;
 grant execute on function api.is_admin() to anon, authenticated;
-grant execute on function api.set_manual_link(bigint, bigint, text), api.remove_manual_link(bigint),
+grant execute on function api.set_manual_link(bigint, bigint, text),
     api.add_exclusion(text, bigint, text, text),
     api.mark_feedback(bigint, text, text, text[], text, text, text, text, text) to authenticated;
+
+-- הסרת שיוך ידני: מדיניות RLS למנהלים (ולא פונקציה): בלי `delete from` בגוף פונקציה, שנתקע ב-apply_migration של
+-- ה-MCP (ראו CLAUDE.md). משתמש שאינו מנהל לא מוחק דבר (המדיניות מסננת את כל השורות).
+grant delete on work.manual_link to authenticated;
+create policy admin_delete on work.manual_link for delete to authenticated using (api.is_admin());
 
 -- ===== views לדשבורד =====
 -- חסר במכלול: דף ויקיפדיה בלי ערך מכלול, שאינו מוחרג, עם ההעשרה והסינון.

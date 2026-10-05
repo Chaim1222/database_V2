@@ -1,6 +1,7 @@
 begin;
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000a1'), ('00000000-0000-0000-0000-0000000000b2');
 insert into work.admin (user_id) values ('00000000-0000-0000-0000-0000000000a1');
+insert into work.manual_link (mech_id, wiki_id) values (50, 1);
 insert into mirror.wiki_page (page_id, title) values (1, 'ויקי');
 insert into enrich.content_scan (wiki_id) values (1);
 insert into enrich.content_scan_detail (wiki_id, counts) values (1, '{}');
@@ -49,6 +50,14 @@ begin
     begin insert into work.manual_link (mech_id, wiki_id) values (11, 1); exception when insufficient_privilege then ok := true; end;
     if not ok then raise exception 'authenticated could insert directly'; end if;
 end $$;
+-- משתמש רגיל לא מוחק שיוך: המדיניות מסננת את השורות (אין שגיאה, אין מחיקה)
+do $$
+declare n int;
+begin
+    delete from work.manual_link where mech_id = 50;
+    get diagnostics n = row_count;
+    if n <> 0 then raise exception 'non-admin deleted % rows', n; end if;
+end $$;
 reset role;
 
 -- מנהל: כותב דרך הפונקציות בלבד
@@ -60,6 +69,7 @@ begin
     perform api.set_manual_link(11, 1, 'בדיקה');
     perform api.add_exclusion('import_excluded', 1, null, 'לא לייבא');
     perform api.mark_feedback(1, 'k2', 'w2', array['e2'], 'true');
+    delete from work.manual_link where mech_id = 50;   -- מנהל מוחק שיוך דרך המדיניות
 end $$;
 reset role;
 
@@ -69,6 +79,7 @@ begin
         raise exception 'manual link not recorded with creator';
     end if;
     if (select count(*) from work.exclusion where wiki_id = 1) <> 1 then raise exception 'exclusion not written'; end if;
+    if exists (select 1 from work.manual_link where mech_id = 50) then raise exception 'admin delete did not remove the link'; end if;
 end $$;
 
 -- service_role עוקף RLS וכותב למראה
