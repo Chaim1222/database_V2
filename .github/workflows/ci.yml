@@ -16,6 +16,19 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests
 
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test dashboard/tests/unit.test.js
+      - name: הקובץ הבנוי מעודכן
+        run: |
+          node dashboard/build.js
+          git diff --exit-code dashboard/dist/gadget-dashboard.js
+
   sql:
     runs-on: ubuntu-latest
     steps:
