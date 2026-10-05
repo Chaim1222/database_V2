@@ -189,5 +189,14 @@ class InitialLoadTests(unittest.TestCase):
         self.assertEqual(finish["p_watermarks"], {"mechalol/delta": "2026-10-05T09:00:00Z"})
 
 
+class UserAgentTests(unittest.TestCase):
+    def test_real_session_gets_our_user_agent(self):
+        import requests
+        from collector.mw import MediaWiki, USER_AGENT
+        mw = MediaWiki("https://example.invalid/w/api.php", session=requests.Session())
+        self.assertEqual(mw.session.headers["User-Agent"], USER_AGENT)
+        self.assertNotIn("python-requests", USER_AGENT)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import requests
 
 from .state import chunks
 
-USER_AGENT = "hamichlol-sync-v2/0.1 (https://github.com/Chaim1222/database_V2)"
+USER_AGENT = "MechalolWikipediaCompareBot/2.0 (https://www.hamichlol.org.il/; bot@hamichlol.org.il)"
 BATCH = 50
 
 
@@ -13,7 +13,7 @@ class MediaWiki:
     def __init__(self, api_url, session=None, sleep=time.sleep):
         self.api_url = api_url
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", USER_AGENT)
+        self.session.headers["User-Agent"] = USER_AGENT  # לא setdefault: ל-requests כבר יש ברירת מחדל שוויקימדיה חוסמת
         self.sleep = sleep
 
     def get(self, params):
