@@ -746,3 +746,35 @@ class ReconcileFixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SmokeTests(unittest.TestCase):
+    class Mw:
+        def __init__(self, n=600, drop_key=None, quiet=False):
+            self.pages = [{"pageid": i + 1, "title": f"ד{i}", "lastrevid": i, **({} if drop_key else {})} for i in range(n)]
+            if drop_key:
+                for p in self.pages:
+                    p.pop(drop_key)
+            self.quiet = quiet
+
+        def all_pages(self):
+            yield from self.pages
+
+        def info(self, ids=(), titles=()):
+            return [p for p in self.pages if p.get("pageid") in set(ids)], []
+
+        def categories(self, ids):
+            return {i: set() for i in ids}
+
+        def touched(self, since, until):
+            return (set() if self.quiet else {1}), set(), [{"kind": "create", "page_id": 1, "title": "א", "ts": "x"}]
+
+    def test_healthy(self):
+        from collector.smoke import run_smoke
+        self.assertEqual(run_smoke({"s": self.Mw()}), [])
+
+    def test_missing_field_and_quiet(self):
+        from collector.smoke import run_smoke
+        self.assertTrue(any("lastrevid" in f for f in run_smoke({"s": self.Mw(drop_key="lastrevid")})))
+        self.assertTrue(any("חשוד" in f for f in run_smoke({"s": self.Mw(quiet=True)})))
+        self.assertTrue(any("allpages" in f for f in run_smoke({"s": self.Mw(n=10)})))

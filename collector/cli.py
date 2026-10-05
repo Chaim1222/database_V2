@@ -1,4 +1,4 @@
-"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | smoke   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -10,6 +10,7 @@ from .enrich import GROUPS, WIKIDATA_API, run_group
 from .initial_load import run_initial_load
 from .reconcile import run_reconcile
 from .revcheck import run_revcheck
+from .smoke import run_smoke
 from .sync import run_sync
 from .templates import run_pending
 
@@ -17,9 +18,13 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 
 def main(argv):
-    if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"]):
-        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"], ["smoke"]):
+        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | smoke", file=sys.stderr)
         return 2
+    if argv[0] == "smoke":   # קורא בלבד מהאתרים, בלי מסד
+        failures = run_smoke({site: MediaWiki(url) for site, url in APIS.items()})
+        print(json.dumps(failures, ensure_ascii=False, indent=2))
+        return 1 if failures else 0
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     if argv[0] == "maintenance":
         after, changed = 0, 0

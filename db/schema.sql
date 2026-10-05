@@ -103,7 +103,12 @@ CREATE FUNCTION api.health_check() RETURNS jsonb
     LANGUAGE sql STABLE
     SET search_path TO ''
     AS $$
-    select coalesce(jsonb_agg(to_jsonb(h)), '[]'::jsonb) from ops.health() h where h.state <> 'ok';
+    select coalesce(jsonb_agg(x), '[]'::jsonb) from (
+        select to_jsonb(h) as x from ops.health() h where h.state <> 'ok'
+        union all
+        select jsonb_build_object('kind', 'db_size', 'state', 'big', 'bytes', pg_database_size(current_database()))
+        where pg_database_size(current_database()) > 400 * 1024 * 1024
+    ) q;
 $$;
 
 --
@@ -221,7 +226,7 @@ $$;
 CREATE FUNCTION api.maintenance_refresh_counts() RETURNS void
     LANGUAGE sql
     SET search_path TO ''
-    AS $$ select ops.refresh_counts(); $$;
+    AS $$ select ops.refresh_counts(); select ops.snapshot_metrics(); $$;
 
 --
 -- Name: maintenance_refresh_gap(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
@@ -1063,6 +1068,21 @@ CREATE FUNCTION ops.refresh_counts() RETURNS void
 $$;
 
 --
+-- Name: snapshot_metrics(); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.snapshot_metrics() RETURNS void
+    LANGUAGE sql
+    SET search_path TO ''
+    AS $$
+    insert into ops.metric_snapshot (day, key, n)
+    select (now() at time zone 'utc')::date, c.key, c.n from ops.dashboard_counts c
+    union all
+    select (now() at time zone 'utc')::date, 'db_bytes', pg_database_size(current_database())
+    on conflict (day, key) do update set n = excluded.n;
+$$;
+
+--
 -- Name: after_exclusion_change(); Type: FUNCTION; Schema: work; Owner: -
 --
 
@@ -1567,6 +1587,27 @@ CREATE VIEW api.v_counts WITH (security_invoker='true') AS
    FROM ops.dashboard_counts;
 
 --
+-- Name: metric_snapshot; Type: TABLE; Schema: ops; Owner: -
+--
+
+CREATE TABLE ops.metric_snapshot (
+    day date NOT NULL,
+    key text NOT NULL,
+    n bigint NOT NULL
+);
+
+--
+-- Name: v_metric_history; Type: VIEW; Schema: api; Owner: -
+--
+
+CREATE VIEW api.v_metric_history WITH (security_invoker='true') AS
+ SELECT day,
+    key,
+    n
+   FROM ops.metric_snapshot
+  ORDER BY day, key;
+
+--
 -- Name: v_missing; Type: VIEW; Schema: api; Owner: -
 --
 
@@ -2030,6 +2071,13 @@ ALTER TABLE ONLY ops.health_threshold
     ADD CONSTRAINT health_threshold_pkey PRIMARY KEY (kind);
 
 --
+-- Name: metric_snapshot metric_snapshot_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
+--
+
+ALTER TABLE ONLY ops.metric_snapshot
+    ADD CONSTRAINT metric_snapshot_pkey PRIMARY KEY (day, key);
+
+--
 -- Name: reconcile_finding reconcile_finding_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
 --
 
@@ -2396,6 +2444,12 @@ ALTER TABLE ops.dashboard_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ops.health_threshold ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: metric_snapshot; Type: ROW SECURITY; Schema: ops; Owner: -
+--
+
+ALTER TABLE ops.metric_snapshot ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: dashboard_counts public_read; Type: POLICY; Schema: ops; Owner: -
 --
 
@@ -2406,6 +2460,12 @@ CREATE POLICY public_read ON ops.dashboard_counts FOR SELECT TO anon, authentica
 --
 
 CREATE POLICY public_read ON ops.health_threshold FOR SELECT TO anon, authenticated USING (true);
+
+--
+-- Name: metric_snapshot public_read; Type: POLICY; Schema: ops; Owner: -
+--
+
+CREATE POLICY public_read ON ops.metric_snapshot FOR SELECT TO anon, authenticated USING (true);
 
 --
 -- Name: reconcile_run public_read; Type: POLICY; Schema: ops; Owner: -
@@ -2831,6 +2891,12 @@ GRANT ALL ON FUNCTION ops.health() TO authenticated;
 GRANT ALL ON FUNCTION ops.refresh_counts() TO service_role;
 
 --
+-- Name: FUNCTION snapshot_metrics(); Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON FUNCTION ops.snapshot_metrics() TO service_role;
+
+--
 -- Name: FUNCTION after_exclusion_change(); Type: ACL; Schema: work; Owner: -
 --
 
@@ -3075,6 +3141,22 @@ GRANT SELECT ON TABLE ops.dashboard_counts TO authenticated;
 GRANT ALL ON TABLE api.v_counts TO service_role;
 GRANT SELECT ON TABLE api.v_counts TO anon;
 GRANT SELECT ON TABLE api.v_counts TO authenticated;
+
+--
+-- Name: TABLE metric_snapshot; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.metric_snapshot TO service_role;
+GRANT SELECT ON TABLE ops.metric_snapshot TO anon;
+GRANT SELECT ON TABLE ops.metric_snapshot TO authenticated;
+
+--
+-- Name: TABLE v_metric_history; Type: ACL; Schema: api; Owner: -
+--
+
+GRANT ALL ON TABLE api.v_metric_history TO service_role;
+GRANT SELECT ON TABLE api.v_metric_history TO anon;
+GRANT SELECT ON TABLE api.v_metric_history TO authenticated;
 
 --
 -- Name: TABLE v_missing; Type: ACL; Schema: api; Owner: -

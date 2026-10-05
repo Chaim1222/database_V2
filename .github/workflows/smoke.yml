@@ -1,0 +1,21 @@
+name: "בדיקת עשן מול האתרים"
+# קורא מוויקיפדיה ומהמכלול ובודק שה-API עדיין מחזיר את הצורה שהקוד מצפה לה. לא נוגע במסד, ולכן אין concurrency.
+# מתוזמן פעם בשבוע, פעיל רק כש-ENABLE_SCHEDULE=true. נכשל => alert.yml פותח Issue.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m collector.cli smoke

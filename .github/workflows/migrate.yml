@@ -1,0 +1,32 @@
+name: "הוספת שינויי מסד"
+# מחיל מיגרציות שטרם הוחלו על המסד (ops/apply_migrations.sh). ברירת מחדל: בדיקה בלבד (apply=false) שמדווחת מה ממתין וסטייה.
+# מיגרציה עם `delete from` או DROP עלולה להיתקע דרך ה-MCP, אבל כאן החיבור ישיר ללא מגבלת 60 שניות.
+# דורש secret V2_DB_URL (Settings > Database > Connection string, מצב Session pooler).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "להחיל בפועל (אחרת בדיקה בלבד)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: בדיקה
+        run: ops/apply_migrations.sh --check
+        continue-on-error: ${{ inputs.apply }}
+        env:
+          DATABASE_URL: ${{ secrets.V2_DB_URL }}
+      - name: החלה
+        if: ${{ inputs.apply }}
+        run: ops/apply_migrations.sh
+        env:
+          DATABASE_URL: ${{ secrets.V2_DB_URL }}
