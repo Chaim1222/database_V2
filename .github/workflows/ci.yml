@@ -1,4 +1,4 @@
-name: "CI - בדיקות"
+name: "בדיקות אוטומטיות"
 on:
   push:
     branches: [main]
