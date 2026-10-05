@@ -1,4 +1,4 @@
-name: שער בריאות
+name: "שער בריאות"
 # קורא רק את מצב הריצות (api.health_check) ונכשל כשהנתונים ישנים או ריצה תקועה, כדי ש-GitHub ישלח מייל.
 # מתוזמן, אך פעיל רק כשמשתנה הריפו ENABLE_SCHEDULE=true (Settings, Variables).
 on:

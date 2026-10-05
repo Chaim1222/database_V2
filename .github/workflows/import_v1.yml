@@ -1,4 +1,4 @@
-name: העברת נתוני אדם מ-v1
+name: "העברת נתוני אדם מ-v1"
 # ידני. קורא את v1 (קריאה בלבד) וכותב ל-v2 דרך api.import_human_data (אידמפוטנטי). דורש מיגרציה 0017, שהטעינה הראשונית הסתיימה,
 # ו-secrets: V1_SUPABASE_URL, V1_SUPABASE_SERVICE_KEY, V2_ADMIN_UID (מזהה חשבון המנהל ב-Authentication של v2).
 # dry_run (ברירת מחדל): רק ספירות מ-v1, בלי כתיבה.

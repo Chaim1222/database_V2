@@ -1,4 +1,4 @@
-name: CI: בדיקות
+name: "CI - בדיקות"
 on:
   push:
     branches: [main]
