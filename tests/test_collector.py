@@ -369,6 +369,12 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(rows[6]["outcome"], "none")
         self.assertEqual(rows[7], {"mech_id": 7, "outcome": "denied"})   # נעול: בידוד בחיפוש בינארי, בלי לפגוע בשאר
 
+    def test_html_entities_in_template_title(self):
+        from collector.templates import referenced_title
+        self.assertEqual(referenced_title("{{מיון ויקיפדיה|דף=ג&#39;ון סאליבן (מתאגרף)}}"), "ג'ון סאליבן (מתאגרף)")
+        self.assertEqual(referenced_title("{{מיון ויקיפדיה|דף=אא&#34;ה טאנג}}"), 'אא"ה טאנג')
+        self.assertEqual(referenced_title("{{מיון ויקיפדיה|דף=א &amp; ב}}"), "א & ב")
+
     def test_garbage_title_is_unresolved_without_api_call(self):
         from collector.templates import check_pages
         long_text = "א" * 300

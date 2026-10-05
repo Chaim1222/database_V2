@@ -3,6 +3,7 @@
 מכוסה בהתאמה הרגילה). הפענוח הועתק מ-scripts/sort_template.py של המערכת הקודמת (רק `דף=`; גרסה ותאריך מחוץ להיקף).
 ראו PLAN_STAGE4.md סעיף 4.1.
 """
+import html
 import re
 
 from .normalize import title_key
@@ -65,7 +66,8 @@ def _split_params(body):
 
 
 def clean_title(raw):
-    value = re.sub(r"^\[\[(.+)\]\]$", r"\1", raw.strip()).strip().replace("_", " ")
+    # ישויות HTML (&#39; &amp; ...) כפי שהן כתובות בתבנית: MediaWiki מפענח אותן בכותרת, ולכן גם אנחנו
+    value = re.sub(r"^\[\[(.+)\]\]$", r"\1", html.unescape(raw).strip()).strip().replace("_", " ")
     return re.sub(r"\s+", " ", value).strip() or None
 
 
