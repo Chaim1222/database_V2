@@ -1,0 +1,36 @@
+name: העברת נתוני אדם מ-v1
+# ידני. קורא את v1 (קריאה בלבד) וכותב ל-v2 דרך api.import_human_data (אידמפוטנטי). דורש מיגרציה 0017, שהטעינה הראשונית הסתיימה,
+# ו-secrets: V1_SUPABASE_URL, V1_SUPABASE_SERVICE_KEY, V2_ADMIN_UID (מזהה חשבון המנהל ב-Authentication של v2).
+# dry_run (ברירת מחדל): רק ספירות מ-v1, בלי כתיבה.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "בלי כתיבה (רק ספירות)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m collector.import_v1 ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          V1_SUPABASE_URL: ${{ secrets.V1_SUPABASE_URL }}
+          V1_SUPABASE_SERVICE_KEY: ${{ secrets.V1_SUPABASE_SERVICE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          V2_ADMIN_UID: ${{ secrets.V2_ADMIN_UID }}

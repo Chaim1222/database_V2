@@ -420,5 +420,34 @@ class EnrichTests(unittest.TestCase):
         self.assertNotIn("sync_apply_enrichment", [c[0] for c in rpc2.calls])
 
 
+class ImportV1Tests(unittest.TestCase):
+    def test_read_v1_pages_and_dry_run(self):
+        from collector import import_v1
+
+        class Resp:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.rows
+
+        class Sess:
+            def __init__(self):
+                self.ranges = []
+
+            def get(self, url, headers=None, params=None, timeout=None):
+                self.ranges.append(headers["Range"])
+                n = 1000 if len(self.ranges) % 2 == 1 and "manual_matches" in url else 3
+                return Resp([{"id": i} for i in range(n)])
+        sess = Sess()
+        rows = import_v1.read_v1("https://x", "k", "manual_matches", "id", "id", session=sess)
+        self.assertEqual((len(rows), sess.ranges), (1003, ["0-999", "1000-1999"]))
+        env = {"V1_SUPABASE_URL": "https://x", "V1_SUPABASE_SERVICE_KEY": "k"}
+        self.assertEqual(import_v1.main(["--dry-run"], env=env, session=Sess()), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
