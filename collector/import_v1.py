@@ -34,6 +34,23 @@ def read_v1(url, key, table, columns, order, session=None):
         offset += 1000
 
 
+CHUNK = 100   # הקריאה ל-API מוגבלת בכ-8 שניות, והטריגרים רצים לכל שורה
+KEYS = {"manual": "p_manual", "blacklist": "p_blacklist", "feedback": "p_feedback", "locks": "p_locks"}
+
+
+def import_chunked(rpc, admin, data):
+    """שולח כל טבלה במנות; מחבר את הנוספו והדולגו. אידמפוטנטי (on conflict do nothing), ולכן בטוח להריץ שוב אחרי כשל."""
+    total = {"inserted": {k: 0 for k in KEYS}, "skipped": {k: [] for k in KEYS}}
+    for name, param in KEYS.items():
+        rows = data[name]
+        for i in range(0, len(rows), CHUNK):
+            payload = {"p_admin": admin, "p_manual": [], "p_blacklist": [], "p_feedback": [], "p_locks": [], param: rows[i:i + CHUNK]}
+            result = rpc.call("import_human_data", payload)
+            total["inserted"][name] += result["inserted"].get(name, 0)
+            total["skipped"][name] += result["skipped"].get(name, [])
+    return total
+
+
 def main(argv, env=os.environ, session=None):
     dry = "--dry-run" in argv
     data = {name: read_v1(env["V1_SUPABASE_URL"], env["V1_SUPABASE_SERVICE_KEY"], *spec, session=session)
@@ -43,8 +60,8 @@ def main(argv, env=os.environ, session=None):
         return 0
     from .rpc import Rpc
     rpc = Rpc(env["SUPABASE_URL"], env["SUPABASE_SERVICE_KEY"])
-    result = rpc.call("import_human_data", {"p_admin": env["V2_ADMIN_UID"], "p_manual": data["manual"], "p_blacklist": data["blacklist"],
-                                            "p_feedback": data["feedback"], "p_locks": data["locks"]})
+    result = import_chunked(rpc, env["V2_ADMIN_UID"], data)
+    rpc.call("maintenance_refresh_counts", {})
     print(json.dumps(result, ensure_ascii=False, indent=2))
     skipped = sum(len(v) for v in result["skipped"].values())
     print(f"דולגו {skipped} שורות (לא קיימות במראה או רמה לא מוכרת): יש לבדוק אותן ידנית" if skipped else "לא דולגה אף שורה")

@@ -179,7 +179,6 @@ begin
     get diagnostics v_n = row_count;
     v_ins := v_ins || jsonb_build_object('feedback', v_n);
 
-    perform ops.refresh_counts();
     return jsonb_build_object('inserted', v_ins, 'skipped', v_skipped);
 end;
 $$;

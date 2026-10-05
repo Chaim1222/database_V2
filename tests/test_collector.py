@@ -531,6 +531,26 @@ class ImportV1Tests(unittest.TestCase):
         self.assertEqual(import_v1.main(["--dry-run"], env=env, session=Sess()), 0)
 
 
+    def test_import_chunked_splits_and_sums(self):
+        from collector import import_v1
+
+        class Rpc:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, fn, payload):
+                self.calls.append(payload)
+                name = next(k for k, p in import_v1.KEYS.items() if payload[p])
+                return {"inserted": {name: len(payload[import_v1.KEYS[name]])}, "skipped": {name: [{"x": 1}] if len(self.calls) == 1 else []}}
+        rpc = Rpc()
+        data = {"manual": [{}] * 5, "blacklist": [{}] * 250, "feedback": [], "locks": [{}] * 100}
+        total = import_v1.import_chunked(rpc, "u", data)
+        self.assertEqual(total["inserted"], {"manual": 5, "blacklist": 250, "feedback": 0, "locks": 100})
+        self.assertEqual(len(rpc.calls), 1 + 3 + 0 + 1)
+        self.assertEqual(total["skipped"]["manual"], [{"x": 1}])
+        self.assertTrue(all(sum(1 for p in import_v1.KEYS.values() if c[p]) == 1 for c in rpc.calls))
+
+
 class ReconcileTests(unittest.TestCase):
     def test_reconcile_report_and_findings(self):
         from collector.reconcile import run_reconcile
