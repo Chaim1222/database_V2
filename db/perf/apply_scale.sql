@@ -11,3 +11,5 @@ select api.sync_apply_mech_pages((select jsonb_agg(jsonb_build_object('page_id',
 select api.sync_apply_mech_pages((select jsonb_agg(jsonb_build_object('page_id', g, 'title', 'ערך ' || g || ' ויקי', 'status', 'imported_documented', 'source_type', 'wikipedia_documented') || case when g % 5 = 0 then jsonb_build_object('wiki_candidate_key', 'ערך ' || (g + 1) || ' ויקי', 'rules', array['x']) else '{}' end) from generate_series(1001, 2000) g));
 \echo '--- apply_wiki_pages: מנה של 1000 שינויי כותרת'
 select api.sync_apply_wiki_pages((select jsonb_agg(jsonb_build_object('page_id', g, 'title', 'ערך ' || g || ' ויקי חדש', 'latest_rev_id', 50000000 + g)) from generate_series(1, 1000) g));
+\echo '--- maintenance_refresh_gap: מנה של 20000 דפי ויקיפדיה (מכלול בגודל חלקי, מטרת המדידה: זמן מנה)'
+select api.maintenance_refresh_gap(0, 20000);
