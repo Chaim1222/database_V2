@@ -33,6 +33,7 @@ alter default privileges in schema ref, mirror, derived, enrich, work, ops, api
 alter default privileges in schema ref, mirror, derived, enrich, work, ops, api
     grant execute on functions to service_role;
 
+-- (המקור כולו ב-ASCII, עם chr(): תווי הכיוון והרווחים הבלתי נראים לא אמורים להיות בקובץ, כי הם אובדים בהעתקה)
 -- נרמול כותרת יחיד (סימטרי, לשני האתרים): NFC, הסרת סימוני כיוון, אחידות מירכאות ומקפים,
 -- רווח קשיח לרווח, איחוד רווחים. זהה ל-`hygiene` ב-scripts/normalize.py (בדיקת golden ב-db/tests).
 -- הכללים הסמנטיים (מכלול -> ויקיפדיה) אינם כאן: הם נגזרים בקולקטור ונשמרים ב-derived.mech_key.
@@ -46,11 +47,11 @@ as $$
     select btrim(
         regexp_replace(
             translate(
-                translate(normalize(t, NFC), E'‎‏؜‪‫‬‭‮', ''),
-                E'״׳“”‘’‐‑‒–—־ ',
-                E'"\'""\'\'------ '
+                translate(normalize(t, NFC), chr(8206) || chr(8207) || chr(1564) || chr(8234) || chr(8235) || chr(8236) || chr(8237) || chr(8238), ''),
+                chr(1524) || chr(1523) || chr(8220) || chr(8221) || chr(8216) || chr(8217) || chr(8208) || chr(8209) || chr(8210) || chr(8211) || chr(8212) || chr(1470) || chr(160),
+                '"''""''''------ '
             ),
-            E'[\\s -   　]+', ' ', 'g'
+            '[' || chr(92) || 's' || chr(8192) || '-' || chr(8202) || chr(8239) || chr(8287) || chr(12288) || ']+', ' ', 'g'
         ),
         ' '
     )

@@ -1,5 +1,5 @@
 begin;
-insert into mirror.wiki_page (page_id, title) values (1, E'בית האזרח  (רמת גן)');
+insert into mirror.wiki_page (page_id, title) values (1, E'בית\u00a0האזרח  (רמת גן)');
 do $$
 declare k text; dup_ok boolean := false; fk_ok boolean := false; ev_ok boolean := false;
 begin
@@ -13,7 +13,7 @@ begin
 
     -- כותרת ייחודית
     begin
-        insert into mirror.wiki_page (page_id, title) values (2, E'בית האזרח  (רמת גן)');
+        insert into mirror.wiki_page (page_id, title) values (2, E'בית\u00a0האזרח  (רמת גן)');
     exception when unique_violation then dup_ok := true; end;
     if not dup_ok then raise exception 'duplicate title was accepted'; end if;
 

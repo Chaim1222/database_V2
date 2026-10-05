@@ -4,7 +4,7 @@ begin;
 insert into mirror.wiki_page (page_id, title) values
     (1, 'ויקי א'), (2, 'הרב ויקי ב'), (3, 'ויקי ג'), (4, 'ויקי ד'), (5, 'אלוה'), (6, 'ויקי ו'), (7, 'ויקי ז');
 insert into mirror.mech_page (page_id, title, status) values
-    (11, E'ויקי א', 'imported_documented'),     -- אותה כותרת אחרי נרמול
+    (11, E'ויקי\u00a0א', 'imported_documented'),     -- אותה כותרת אחרי נרמול
     (12, 'ויקי ב', 'imported_documented'),           -- בוויקיפדיה "הרב ויקי ב"
     (14, 'מכלול ד', 'imported_documented'),          -- התבנית מצביעה על דף 4
     (15, 'אלוק', 'imported_documented'),             -- הכללים הסמנטיים: אלוק -> אלוה
