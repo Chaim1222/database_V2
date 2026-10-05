@@ -355,5 +355,70 @@ class TemplateTests(unittest.TestCase):
             resolve_wiki_titles(Mw(), ["כותרת"])
 
 
+class EnrichTests(unittest.TestCase):
+    class Mw:
+        def __init__(self, reply):
+            self.reply, self.calls = reply, []
+
+        def get(self, params):
+            self.calls.append(params)
+            return self.reply(params) if callable(self.reply) else self.reply
+
+    def test_length_skips_missing(self):
+        from collector.enrich import fetch_length
+        mw = self.Mw({"query": {"pages": [{"title": "א", "length": 100}, {"title": "ב", "missing": True}]}})
+        rows = fetch_length(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])
+        self.assertEqual(rows, [{"wiki_id": 1, "length": 100}])
+
+    def test_redirect_flags_and_missing_answer(self):
+        from collector.enrich import fetch_redirect
+        mw = self.Mw({"query": {"pages": [{"title": "א", "redirect": True}, {"title": "ב", "missing": True}]}})
+        rows = {r["wiki_id"]: r["mech_redirect"] for r in fetch_redirect(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])}
+        self.assertEqual(rows, {1: True, 2: False})
+        with self.assertRaises(RuntimeError):
+            fetch_redirect(self.Mw({"query": {"pages": []}}), [{"wiki_id": 1, "title": "א"}])
+
+    def test_desc_empty_is_a_checked_result(self):
+        from collector.enrich import fetch_desc
+        mw = self.Mw({"entities": {"Q1": {"sitelinks": {"hewiki": {"title": "א"}}, "descriptions": {"he": {"value": "תיאור"}}},
+                                   "-1": {"missing": ""}}})
+        rows = {r["wiki_id"]: r["wikidata_desc"] for r in fetch_desc(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])}
+        self.assertEqual(rows, {1: "תיאור", 2: ""})
+
+    def test_created(self):
+        from collector.enrich import fetch_created
+        mw = self.Mw(lambda p: {"query": {"pages": [{"title": p["titles"], "revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}
+                                                  if p["titles"] == "א" else {"title": p["titles"], "missing": True}]}})
+        rows = fetch_created(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])
+        self.assertEqual(rows, [{"wiki_id": 1, "created_at": "2020-01-01T00:00:00Z"}, {"wiki_id": 2, "created_at": None}])
+
+    def test_run_group_loops_until_empty_and_failure_sends_nothing(self):
+        from collector.enrich import run_group
+
+        class Rpc:
+            def __init__(self):
+                self.calls, self.served = [], False
+
+            def call(self, fn, payload):
+                self.calls.append((fn, payload))
+                if fn == "enrich_pending":
+                    if self.served:
+                        return []
+                    self.served = True
+                    return [{"wiki_id": 1, "title": "א"}]
+        rpc = Rpc()
+        mw = self.Mw({"query": {"pages": [{"title": "א", "length": 5}]}})
+        self.assertEqual(run_group("length", {"wiki": mw}, rpc, log=lambda *_: None), 1)
+        self.assertEqual([c[0] for c in rpc.calls], ["enrich_pending", "sync_apply_enrichment", "enrich_pending"])
+
+        class Boom:
+            def get(self, params):
+                raise RuntimeError("api down")
+        rpc2 = Rpc()
+        with self.assertRaises(RuntimeError):
+            run_group("length", {"wiki": Boom()}, rpc2, log=lambda *_: None)
+        self.assertNotIn("sync_apply_enrichment", [c[0] for c in rpc2.calls])
+
+
 if __name__ == "__main__":
     unittest.main()
