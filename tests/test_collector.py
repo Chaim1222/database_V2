@@ -160,5 +160,34 @@ class SyncFlowTests(unittest.TestCase):
         self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
 
 
+class InitialLoadTests(unittest.TestCase):
+    def test_load_batches_and_sets_watermark_at_start(self):
+        from datetime import datetime, timezone
+        from collector import initial_load as il
+
+        class Mw(FakeMw):
+            def all_pages(self):
+                yield page(1, "א")
+                yield page(2, "ב", redirect=True)
+                yield page(3, "קרבן פסח")
+                yield page(4, "User:x", ns=2)
+
+        old = il.BATCH
+        il.BATCH = 1
+        try:
+            rpc = FakeRpc({})
+            mw = Mw(set(), set(), [], [], [], {3: {CAT_CREATED}})
+            il.run_initial_load({"mechalol": mw}, rpc, now=datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc), log=lambda *_: None)
+        finally:
+            il.BATCH = old
+        applies = [c[1] for c in rpc.calls if c[0] == "sync_apply_mech_pages"]
+        self.assertEqual([[d["page_id"] for d in a["p_live"]] for a in applies], [[1], [3]])
+        self.assertTrue(all(a["p_gone_ids"] == [] and a["p_gone_titles"] == [] for a in applies))
+        self.assertEqual(applies[1]["p_live"][0]["wiki_candidate_key"], "קורבן פסח")
+        self.assertNotIn("wiki_candidate_key", applies[0]["p_live"][0])
+        finish = rpc.calls[-1][1]
+        self.assertEqual(finish["p_watermarks"], {"mechalol/delta": "2026-10-05T09:00:00Z"})
+
+
 if __name__ == "__main__":
     unittest.main()

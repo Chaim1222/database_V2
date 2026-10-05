@@ -1,21 +1,23 @@
-"""python -m collector.cli sync   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync | load   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
 
 from .mw import MediaWiki
 from .rpc import Rpc
+from .initial_load import run_initial_load
 from .sync import run_sync
 
 APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://www.hamichlol.org.il/w/api.php"}
 
 
 def main(argv):
-    if argv[:1] != ["sync"]:
-        print("שימוש: python -m collector.cli sync", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"]):
+        print("שימוש: python -m collector.cli sync | load", file=sys.stderr)
         return 2
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-    stats = run_sync({site: MediaWiki(url) for site, url in APIS.items()}, rpc)
+    run = run_sync if argv[0] == "sync" else run_initial_load
+    stats = run({site: MediaWiki(url) for site, url in APIS.items()}, rpc)
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
 

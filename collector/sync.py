@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta, timezone
 
 from .classify import classify
+from .normalize import mech_key_row
 from .state import chunks, resolve
 
 OVERLAP = timedelta(minutes=10)
@@ -16,17 +17,27 @@ def _iso(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def enrich_mech(mw, live):
+    """מוסיף לדפי המכלול סיווג (לפי קטגוריות הדף) ומפתח סמנטי (רק כשהכותרת השתנתה בכללים)."""
+    if not live:
+        return
+    cats = mw.categories([d["page_id"] for d in live])
+    for d in live:
+        c = classify(cats.get(d["page_id"], set()))
+        d.update(status=c["status"], source_type=c["source_type"],
+                 needs_attention=c["needs_attention"], is_dictionary=c["is_dictionary"])
+        row = mech_key_row(d["page_id"], d["title"])
+        if row:
+            d.update(wiki_candidate_key=row["wiki_candidate_key"], rules=row["rules"])
+
+
 def sync_site(site, mw, rpc, run_id, since, until):
     """מחזיר סטטיסטיקה. since/until: מחרוזות ISO (UTC)."""
     ids, titles, events = mw.touched(since, until)
     by_id, by_title = mw.info(ids, titles)
     live, gone_ids, gone_titles = resolve(by_id, by_title, ids, titles)
-    if site == "mechalol" and live:
-        cats = mw.categories([d["page_id"] for d in live])
-        for d in live:
-            c = classify(cats.get(d["page_id"], set()))
-            d.update(status=c["status"], source_type=c["source_type"],
-                     needs_attention=c["needs_attention"], is_dictionary=c["is_dictionary"])
+    if site == "mechalol":
+        enrich_mech(mw, live)
     totals = {"touched_ids": len(ids), "touched_titles": len(titles), "live": len(live),
               "gone_ids": len(gone_ids), "gone_titles": len(gone_titles)}
     parts = list(chunks(live, APPLY_CHUNK)) or [[]]

@@ -103,3 +103,9 @@ class MediaWiki:
                     break
                 params.update(data["continue"])
         return result
+
+    def all_pages(self):
+        """כל הערכים החיים במרחב הראשי (בלי הפניות): {pageid, title, lastrevid, ns}, לפי סדר הכותרות."""
+        params = {"action": "query", "generator": "allpages", "gapnamespace": 0, "gapfilterredir": "nonredirects",
+                  "gaplimit": 500, "prop": "info"}
+        yield from self.paged(params, "pages")
