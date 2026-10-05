@@ -215,10 +215,19 @@ end;
 $$;
 
 --
+-- Name: maintenance_refresh_counts(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.maintenance_refresh_counts() RETURNS void
+    LANGUAGE sql
+    SET search_path TO ''
+    AS $$ select ops.refresh_counts(); $$;
+
+--
 -- Name: maintenance_refresh_gap(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION api.maintenance_refresh_gap(p_after bigint DEFAULT 0, p_limit integer DEFAULT 20000) RETURNS jsonb
+CREATE FUNCTION api.maintenance_refresh_gap(p_after bigint DEFAULT 0, p_limit integer DEFAULT 5000) RETURNS jsonb
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
@@ -232,7 +241,6 @@ begin
         return jsonb_build_object('last_id', null, 'changed', 0);
     end if;
     v_changed := derived.refresh_wiki_gap(v_ids);
-    perform ops.refresh_counts();
     return jsonb_build_object('last_id', v_ids[cardinality(v_ids)], 'changed', v_changed);
 end;
 $$;
@@ -1031,8 +1039,12 @@ CREATE FUNCTION ops.refresh_counts() RETURNS void
     AS $$
     insert into ops.dashboard_counts (key, n, updated_at)
     values
-        ('wiki_pages',   (select count(*) from mirror.wiki_page), now()),
-        ('mech_pages',   (select count(*) from mirror.mech_page), now()),
+        ('wiki_pages',   (select case when c.reltuples >= 0 then c.reltuples::bigint
+                                      else (select count(*) from mirror.wiki_page) end
+                           from pg_class c where c.oid = 'mirror.wiki_page'::regclass), now()),
+        ('mech_pages',   (select case when c.reltuples >= 0 then c.reltuples::bigint
+                                      else (select count(*) from mirror.mech_page) end
+                           from pg_class c where c.oid = 'mirror.mech_page'::regclass), now()),
         ('missing',      (select count(*) from derived.wiki_gap g
                            join mirror.wiki_page w on w.page_id = g.wiki_id
                            where g.kind = 'missing'
@@ -2617,6 +2629,13 @@ GRANT ALL ON FUNCTION api.is_admin() TO authenticated;
 
 REVOKE ALL ON FUNCTION api.maintenance_prune(p_keep interval) FROM PUBLIC;
 GRANT ALL ON FUNCTION api.maintenance_prune(p_keep interval) TO service_role;
+
+--
+-- Name: FUNCTION maintenance_refresh_counts(); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.maintenance_refresh_counts() FROM PUBLIC;
+GRANT ALL ON FUNCTION api.maintenance_refresh_counts() TO service_role;
 
 --
 -- Name: FUNCTION maintenance_refresh_gap(p_after bigint, p_limit integer); Type: ACL; Schema: api; Owner: -

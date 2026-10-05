@@ -24,10 +24,11 @@ def main(argv):
     if argv[0] == "maintenance":
         after, changed = 0, 0
         while True:   # רענון מלא של "חסר" במנות (רשת ביטחון להחלה המצטברת)
-            result = rpc.call("maintenance_refresh_gap", {"p_after": after, "p_limit": 5000})
+            result = rpc.call("maintenance_refresh_gap", {"p_after": after, "p_limit": 2000})
             if result["last_id"] is None:
                 break
             after, changed = result["last_id"], changed + result["changed"]
+        rpc.call("maintenance_refresh_counts", {})
         print(json.dumps({"gap_changed": changed, "prune": rpc.call("maintenance_prune", {})}, ensure_ascii=False))
         return 0
     if argv[0] == "health":
