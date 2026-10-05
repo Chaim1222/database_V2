@@ -4,6 +4,7 @@ name: "4. בדיקת גרסאות (פעם בחודש)"
 on:
   schedule:
     - cron: "37 3 5 * *"
+  workflow_call:
   workflow_dispatch:
 
 concurrency:

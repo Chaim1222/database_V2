@@ -4,6 +4,7 @@ name: "5. השוואה מלאה מול האתרים"
 on:
   schedule:
     - cron: "13 3 * * 0"
+  workflow_call:
   workflow_dispatch:
     inputs:
       skip_mechalol:

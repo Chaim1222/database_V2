@@ -1,0 +1,36 @@
+name: "2 עד 5: הכול ברצף"
+# מפעיל ברצף, אחד אחרי השני: 2. בדיקת תבניות מיון, 3. השלמת פרטים, 4. בדיקת גרסאות, 5. השוואה מלאה מול האתרים.
+# כל שלב רץ רק אם כל השלבים שלפניו הצליחו; כשל עוצר את השרשרת. "להתחיל מ" מאפשר לדלג על שלבים שכבר רצו (למשל להתחיל מ-3).
+# כל שלב נשאר גם workflow נפרד שאפשר להפעיל לבד. אין כאן concurrency משלו: לכל שלב יש קבוצת concurrency משלו (כתיבה למסד אחת בכל פעם).
+on:
+  workflow_dispatch:
+    inputs:
+      start_from:
+        description: "להתחיל משלב"
+        type: choice
+        options: ["2", "3", "4", "5"]
+        default: "2"
+
+jobs:
+  templates:
+    if: ${{ inputs.start_from == '2' }}
+    uses: ./.github/workflows/templates.yml
+    secrets: inherit
+
+  enrich:
+    needs: [templates]
+    if: ${{ !cancelled() && needs.templates.result != 'failure' && needs.templates.result != 'cancelled' && contains(fromJSON('["2","3"]'), inputs.start_from) }}
+    uses: ./.github/workflows/enrich.yml
+    secrets: inherit
+
+  revcheck:
+    needs: [templates, enrich]
+    if: ${{ !cancelled() && needs.templates.result != 'failure' && needs.templates.result != 'cancelled' && needs.enrich.result != 'failure' && needs.enrich.result != 'cancelled' && contains(fromJSON('["2","3","4"]'), inputs.start_from) }}
+    uses: ./.github/workflows/revcheck.yml
+    secrets: inherit
+
+  reconcile:
+    needs: [templates, enrich, revcheck]
+    if: ${{ !cancelled() && needs.templates.result != 'failure' && needs.templates.result != 'cancelled' && needs.enrich.result != 'failure' && needs.enrich.result != 'cancelled' && needs.revcheck.result != 'failure' && needs.revcheck.result != 'cancelled' }}
+    uses: ./.github/workflows/reconcile.yml
+    secrets: inherit

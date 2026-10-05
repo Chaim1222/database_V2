@@ -4,6 +4,7 @@ name: "3. השלמת פרטים לערכים החסרים"
 on:
   schedule:
     - cron: "37 1 * * *"
+  workflow_call:
   workflow_dispatch:
     inputs:
       groups:
