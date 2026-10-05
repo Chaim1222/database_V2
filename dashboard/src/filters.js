@@ -31,4 +31,12 @@ function buildParams(tab, state) {
 	return out;
 }
 
-if (typeof module !== 'undefined') module.exports = { levelParams: levelParams, buildParams: buildParams, escapeIlike: escapeIlike };
+// גרף מגמה טקסטואלי (▁..█) מרשימת ערכים לפי סדר הזמן; ריק כשיש פחות משתי נקודות
+function sparkline(values) {
+	var vals = values.map(Number).filter(function (v) { return isFinite(v); });
+	if (vals.length < 2) return '';
+	var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals), bars = '▁▂▃▄▅▆▇█';
+	return vals.map(function (v) { return bars[max === min ? 0 : Math.round((v - min) / (max - min) * 7)]; }).join('');
+}
+
+if (typeof module !== 'undefined') module.exports = { sparkline: sparkline, levelParams: levelParams, buildParams: buildParams, escapeIlike: escapeIlike };

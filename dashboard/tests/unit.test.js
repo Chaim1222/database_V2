@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { levelParams, buildParams, escapeIlike } = require('../src/filters.js');
+const { levelParams, buildParams, escapeIlike, sparkline } = require('../src/filters.js');
 const { toCsv } = require('../src/export.js');
 const { createClient } = require('../src/api-client.js');
 const { TABS, rowLevel } = require('../src/tabs.js');
@@ -107,4 +107,11 @@ test('lookupTitles: קיום במכלול ובוויקיפדיה (נרמול ו�
 	assert.deepStrictEqual(res.mech, { א: 'missing', ב: 'redirect', ג: 'exists' });
 	assert.deepStrictEqual(res.wiki.ב, { id: 2, title: 'ב יעד' });
 	assert.strictEqual(res.wiki.ג, null);
+});
+
+test('sparkline: מגמה טקסטואלית', () => {
+	assert.strictEqual(sparkline([1]), '');
+	assert.strictEqual(sparkline([5, 5, 5]), '▁▁▁');
+	assert.strictEqual(sparkline([0, 10]), '▁█');
+	assert.strictEqual(sparkline([0, 5, 10]).length, 3);
 });

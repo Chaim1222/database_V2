@@ -16,8 +16,10 @@
 | `db/perf/` | מדידות קנה מידה (`run_scale.sh`, `SCALE_SCRIPT=apply_scale.sql`, `sizes.sql`) |
 | `collector/` | Python: `sync`, `load` (דמפ), `rebuild`, `templates`, `enrich`, `revcheck`, `reconcile`, `health`, `maintenance`, `import_v1` |
 | `dashboard/` | דשבורד חדש: `src/` (מודולים), `build.js`, `dist/gadget-dashboard.js` (הקובץ להעתקה לוויקי), `tests/` |
-| `ops/` | נוהל גיבוי ושחזור והדמיה מקומית שלו |
-| `.github/workflows/` | `sync`, `enrich`, `reconcile`, `revcheck`, `maintenance`, `health`, `load`, `rebuild`, `templates`, `import_v1`, `ci` |
+| `ops/` | נוהל גיבוי ושחזור והדמיה מקומית שלו; `apply_migrations.sh` |
+
+תקלות: `RUNBOOK.md`. תוכנית מעבר: `CUTOVER.md`.
+| `.github/workflows/` | `sync`, `enrich`, `reconcile`, `revcheck`, `maintenance`, `health`, `load`, `rebuild`, `templates`, `import_v1`, `ci`, `alert` (Issue בכשל), `smoke` (בדיקת עשן שבועית), `migrate` (הוספת מיגרציות), `backup`, `chain` |
 
 המנוע של סינון התוכן (`word-filter/`) נשאר בריפו הישן; `scan-missing.js --backend v2` כותב משם למסד הזה.
 

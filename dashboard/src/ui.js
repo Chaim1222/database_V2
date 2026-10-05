@@ -94,6 +94,15 @@ function createApp(root, client, env) {
 		if (t.special === 'culture') return loadCulture(null);
 		var my = ++token;
 		var req = t.special === 'stats' ? client.select('v_counts', { count: false, to: 50 }) : client.select('v_sync_status', { count: false, to: 50 });
+		if (t.special === 'stats') {   // היסטוריה (90 הימים האחרונים) לגרף מגמה; כשל בה אינו מפיל את הלשונית
+			state.history = {};
+			req = req.then(function (res) {
+				return client.select('v_metric_history', { count: false, order: 'day.desc', to: 1999 }).then(function (h) {
+					h.data.slice().reverse().forEach(function (r) { (state.history[r.key] = state.history[r.key] || []).push(r.n); });
+					return res;
+				}, function () { return res; });
+			});
+		}
 		return req.then(function (res) { if (my === token) { state.rows = res.data; state.error = null; render(); } })
 			.catch(function (e) { if (my === token) { state.error = e.message; render(); } });
 	}
@@ -313,7 +322,7 @@ function createApp(root, client, env) {
 		if (t.special === 'culture') return cultureView();
 		if (t.special === 'stats') {
 			return h('table', { 'class': 'mchl2-table' }, state.rows.map(function (r) {
-				return h('tr', {}, [h('td', { text: STAT_LABELS[r.key] || r.key }), h('td', { text: Number(r.n).toLocaleString('he-IL') }), h('td', { 'class': 'mchl2-muted', text: String(r.updated_at || '').slice(0, 16).replace('T', ' ') })]);
+				return h('tr', {}, [h('td', { text: STAT_LABELS[r.key] || r.key }), h('td', { text: Number(r.n).toLocaleString('he-IL') }), h('td', { 'class': 'mchl2-muted', dir: 'ltr', title: 'מגמה לפי ימים', text: sparkline(((state.history || {})[r.key] || []).slice(-30)) }), h('td', { 'class': 'mchl2-muted', text: String(r.updated_at || '').slice(0, 16).replace('T', ' ') })]);
 			}));
 		}
 		var names = { sync: 'סנכרון', reconcile: 'reconcile', enrich: 'העשרה', scan: 'סינון', maintenance: 'תחזוקה', rebuild: 'טעינה' };
