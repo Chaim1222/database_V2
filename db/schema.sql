@@ -116,7 +116,7 @@ $$;
 --
 
 CREATE FUNCTION api.import_human_data(p_admin uuid, p_manual jsonb DEFAULT '[]'::jsonb, p_blacklist jsonb DEFAULT '[]'::jsonb, p_feedback jsonb DEFAULT '[]'::jsonb, p_locks jsonb DEFAULT '[]'::jsonb) RETURNS jsonb
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
     AS $$
 declare
