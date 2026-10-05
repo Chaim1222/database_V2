@@ -1,4 +1,4 @@
-name: בדיקות
+name: CI: בדיקות
 on:
   push:
     branches: [main]
