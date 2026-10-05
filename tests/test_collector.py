@@ -1,10 +1,9 @@
-import importlib.util
 import os
 import unittest
 
 from collector.classify import CAT_CREATED, CAT_DICTIONARY, CAT_PAGES_TO_OPEN, classify, parse_update_month
 from collector.normalize import mech_key_row, semantic_candidate, title_key
-from collector.state import chunks, resolve
+from collector.state import IncompleteResponse, chunks, resolve
 from collector.sync import run_sync
 
 BS = chr(92)
@@ -27,20 +26,17 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(row["wiki_candidate_key"], "קורבן פסח")
 
     def test_golden_vs_old_system(self):
-        old = "/home/user/database/scripts/normalize.py"
-        if not os.path.exists(old):
-            self.skipTest("המערכת הקודמת אינה זמינה")
-        spec = importlib.util.spec_from_file_location("old_normalize", old)
-        mod = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(mod)
-        except Exception as exc:
-            self.skipTest(f"טעינת המודול הישן נכשלה: {exc}")
-        cases = ["אלוקים", "קרבן פסח", "מרכז הנאולוגי", "ה'תשפ\"כ", "אליל", "א-ל", "דף רגיל", "\u200fאבג\u00a0 \u05f4ד\u05f4 \u2013 ה",
-                 '"קדוש" השם', "אישיות (אישיות מהתנ\"ך)"]
-        for title in cases:
-            self.assertEqual(title_key(title), mod.hygiene(title), title)
-            self.assertEqual(semantic_candidate(title)[0], mod.normalize_title(title)[0], title)
+        # הפלט נשמר מהקוד של המערכת הקודמת (scripts/normalize.py) ב-tests/golden_normalize.json (JSON עם escape)
+        import json
+        path = os.path.join(os.path.dirname(__file__), "golden_normalize.json")
+        with open(path, encoding="utf-8") as fh:
+            cases = json.load(fh)
+        self.assertGreaterEqual(len(cases), 20)
+        for c in cases:
+            self.assertEqual(title_key(c["title"]), c["hygiene"], c["title"])
+            candidate, rules = semantic_candidate(c["title"])
+            self.assertEqual(candidate, c["normalized"], c["title"])
+            self.assertEqual(rules, [r for r in c["rules"]], c["title"])
 
 
 class ClassifyTests(unittest.TestCase):
@@ -78,6 +74,19 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             resolve([page(1, "א"), page(2, "א")], [], {1, 2}, set())
 
+    def test_empty_response_is_not_a_deletion(self):
+        # תשובה ריקה עבור מזהה שנשאל: לא "נעלם" אלא תשובה חלקית
+        with self.assertRaises(IncompleteResponse):
+            resolve([], [], {710987}, set())
+        with self.assertRaises(IncompleteResponse):
+            resolve([], [], set(), {"כותרת"})
+
+    def test_explicit_missing_is_gone(self):
+        live, gone_ids, gone_titles = resolve(
+            [{"pageid": 710987, "ns": 0, "missing": True}], [{"title": "כותרת_ב", "ns": 0, "missing": True}],
+            {710987}, {"כותרת ב"})
+        self.assertEqual((live, gone_ids, gone_titles), ([], [710987], ["כותרת_ב"]))
+
     def test_chunks(self):
         self.assertEqual(list(chunks(range(5), 2)), [[0, 1], [2, 3], [4]])
 
@@ -101,12 +110,15 @@ class FakeMw:
 
 
 class FakeRpc:
-    def __init__(self, marks):
+    def __init__(self, marks, load_start="2026-10-05T09:00:00.123+00:00"):
         self.calls = []
         self.marks = marks
+        self.load_start = load_start
 
     def call(self, fn, payload):
         self.calls.append((fn, payload))
+        if fn == "sync_load_begin":
+            return self.load_start
         if fn == "sync_run_start":
             return {"run_id": "r1", "watermarks": self.marks}
         if fn.startswith("sync_apply"):
@@ -122,9 +134,9 @@ class SyncFlowTests(unittest.TestCase):
 
     def mws(self):
         return {
-            "wikipedia": FakeMw({1}, {"א"}, [], [page(1, "א")], []),
+            "wikipedia": FakeMw({1}, {"א"}, [], [page(1, "א")], [page(1, "א")]),
             "mechalol": FakeMw({2}, {"ב"}, [{"kind": "move", "page_id": 2, "title": "ב", "new_title": "ג", "ts": "t"}],
-                               [page(2, "ג")], [], {2: {CAT_CREATED}}),
+                               [page(2, "ג")], [{"title": "ב", "ns": 0, "redirect": True, "pageid": 8}], {2: {CAT_CREATED}}),
         }
 
     def test_success_advances_watermarks_and_classifies(self):
@@ -161,23 +173,20 @@ class SyncFlowTests(unittest.TestCase):
 
 
 class InitialLoadTests(unittest.TestCase):
-    def test_load_batches_and_sets_watermark_at_start(self):
-        from datetime import datetime, timezone
-        from collector import initial_load as il
-
+    def _mw(self, pages):
         class Mw(FakeMw):
             def all_pages(self):
-                yield page(1, "א")
-                yield page(2, "ב", redirect=True)
-                yield page(3, "קרבן פסח")
-                yield page(4, "User:x", ns=2)
+                yield from pages
+        return Mw(set(), set(), [], [], [], {3: {CAT_CREATED}})
 
+    def test_load_batches_and_uses_stored_start(self):
+        from collector import initial_load as il
+        pages = [page(1, "א"), page(2, "ב", redirect=True), page(3, "קרבן פסח"), page(4, "User:x", ns=2)]
         old = il.BATCH
         il.BATCH = 1
         try:
             rpc = FakeRpc({})
-            mw = Mw(set(), set(), [], [], [], {3: {CAT_CREATED}})
-            il.run_initial_load({"mechalol": mw}, rpc, now=datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc), log=lambda *_: None)
+            il.run_initial_load({"mechalol": self._mw(pages)}, rpc, log=lambda *_: None)
         finally:
             il.BATCH = old
         applies = [c[1] for c in rpc.calls if c[0] == "sync_apply_mech_pages"]
@@ -185,8 +194,18 @@ class InitialLoadTests(unittest.TestCase):
         self.assertTrue(all(a["p_gone_ids"] == [] and a["p_gone_titles"] == [] for a in applies))
         self.assertEqual(applies[1]["p_live"][0]["wiki_candidate_key"], "קורבן פסח")
         self.assertNotIn("wiki_candidate_key", applies[0]["p_live"][0])
+        self.assertEqual(rpc.calls[-1][1]["p_watermarks"], {"mechalol/delta": "2026-10-05T09:00:00.123+00:00"})
+        names = [c[0] for c in rpc.calls]
+        self.assertLess(names.index("sync_load_begin"), names.index("sync_apply_mech_pages"))
+
+    def test_empty_load_fails_and_keeps_watermark(self):
+        from collector import initial_load as il
+        rpc = FakeRpc({})
+        with self.assertRaises(RuntimeError):
+            il.run_initial_load({"wikipedia": self._mw([])}, rpc, log=lambda *_: None)
         finish = rpc.calls[-1][1]
-        self.assertEqual(finish["p_watermarks"], {"mechalol/delta": "2026-10-05T09:00:00Z"})
+        self.assertEqual(finish["p_status"], "failed")
+        self.assertNotIn("p_watermarks", finish)
 
 
 class UserAgentTests(unittest.TestCase):

@@ -4,10 +4,8 @@
 הדלתא הראשונה תכסה שינויים שנעשו בזמן הטעינה).
 לא מוחקת דבר: gone ריק. טעינה על מסד שאינו ריק משאירה שורות מיושנות; לשם כך יש reconcile.
 """
-from datetime import datetime, timezone
-
 from .state import is_live
-from .sync import APPLY_FN, _iso, enrich_mech
+from .sync import APPLY_FN, enrich_mech
 
 BATCH = 1000
 
@@ -34,17 +32,19 @@ def load_site(site, mw, rpc, log=print):
             if len(batch) >= BATCH:
                 flush()
     flush()
+    if total == 0:
+        raise RuntimeError(f"{site}: הטעינה לא החזירה אף דף; לא מקדמים נקודת דלתא על תשובה ריקה")
     return total
 
 
-def run_initial_load(mws, rpc, now=None, log=print):
-    now = now or datetime.now(timezone.utc)
+def run_initial_load(mws, rpc, log=print):
     started = rpc.call("sync_run_start", {"p_kind": "rebuild"})
     run_id, marks, stats = started["run_id"], {}, {}
     try:
         for site, mw in mws.items():
+            start = rpc.call("sync_load_begin", {"p_site": site})
             stats[site] = {"loaded": load_site(site, mw, rpc, log)}
-            marks[f"{site}/delta"] = _iso(now)
+            marks[f"{site}/delta"] = start
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": str(exc)[:1000]})
         raise

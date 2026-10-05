@@ -9,7 +9,9 @@ from .normalize import mech_key_row
 from .state import chunks, resolve
 
 OVERLAP = timedelta(minutes=10)
-APPLY_CHUNK = 2000
+# מנה אחת = קריאה אטומית אחת. פיצול למנות מוותר על האטומיות (והחלפות כותרות בין מנות נראות כמיושנות),
+# לכן המנה גדולה מכל דלתא רגילה; דלתא גדולה ממנה נכשלת בהחלה חלקית ומתאוששת בהרצה חוזרת (נקודת ההתקדמות לא זזה).
+APPLY_CHUNK = 20000
 APPLY_FN = {"wikipedia": "sync_apply_wiki_pages", "mechalol": "sync_apply_mech_pages"}
 
 
