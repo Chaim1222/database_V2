@@ -16,7 +16,7 @@ def page(pid, title, ns=0, **kw):
 
 class NormalizeTests(unittest.TestCase):
     def test_hygiene(self):
-        self.assertEqual(title_key("‏אבג  ״ד״ – ה"), 'אבג "ד" - ה')
+        self.assertEqual(title_key("\u200fאבג\u00a0 ״ד״ – ה"), 'אבג "ד" - ה')
         self.assertIsNone(title_key(None))
         self.assertEqual(title_key("  א   ב  "), "א ב")
 
