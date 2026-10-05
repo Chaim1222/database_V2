@@ -288,5 +288,72 @@ class DumpTests(unittest.TestCase):
         self.assertEqual([d["page_id"] for d in applied], [1, 4])
 
 
+class TemplateTests(unittest.TestCase):
+    def test_parse(self):
+        from collector.templates import referenced_title
+        self.assertEqual(referenced_title("טקסט {{מיון ויקיפדיה|דף=[[אבג_דה]]|גרסה=5}}"), "אבג דה")
+        self.assertEqual(referenced_title("{{מיון ויקיפדיה|דף=א|תאריך={{x|y}}}} ואחרי {{מיון ויקיפדיה|דף=ב}}"), "ב")
+        self.assertIsNone(referenced_title("{{מיון ויקיפדיה|גרסה=5}}"))
+        self.assertIsNone(referenced_title("{{מיון ויקיפדיה|דף=א"))   # לא נסגרת
+        self.assertIsNone(referenced_title(""))
+
+    def _mw(self, pages_by_id, denied_ids=(), wiki_pages=None, redirects=None):
+        from collector.templates import DENIED_CODES
+
+        class Mw:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, params):
+                self.calls.append(params)
+                if "pageids" in params:
+                    ids = [int(i) for i in params["pageids"].split("|")]
+                    if any(i in denied_ids for i in ids):
+                        raise RuntimeError("שגיאת API: {'code': 'readapidenied'}")
+                    return {"query": {"pages": [
+                        {"pageid": i, "revisions": [{"revid": i * 10, "slots": {"main": {"content": pages_by_id[i]}}}]} for i in ids]}}
+                titles = params["titles"].split("|")
+                query = {"pages": [], "redirects": [], "normalized": []}
+                for t in titles:
+                    target = (redirects or {}).get(t, t)
+                    if (redirects or {}).get(t):
+                        query["redirects"].append({"from": t, "to": target})
+                    page = (wiki_pages or {}).get(target)
+                    query["pages"].append(page if page else {"title": target, "ns": 0, "missing": True})
+                return {"query": query}
+        return Mw()
+
+    def test_check_pages_outcomes(self):
+        from collector.templates import check_pages
+        mech = self._mw({
+            1: "{{מיון ויקיפדיה|דף=ערך א}}",             # same
+            2: "אין תבנית",                                  # none
+            3: "{{מיון ויקיפדיה|דף=יעד חי}}",              # ok
+            4: "{{מיון ויקיפדיה|דף=לא קיים}}",             # unresolved
+            5: "{{מיון ויקיפדיה|דף=הפניה}}",               # ok דרך הפניה
+            6: "x", 7: "x"}, denied_ids={7})
+        wiki = self._mw({}, wiki_pages={"יעד חי": {"pageid": 50, "title": "יעד חי", "ns": 0},
+                                        "יעד סופי": {"pageid": 51, "title": "יעד סופי", "ns": 0}},
+                        redirects={"הפניה": "יעד סופי"})
+        titles = {1: "ערך א", 2: "ב", 3: "ג", 4: "ד", 5: "ה", 6: "ו", 7: "ז"}
+        rows = {r["mech_id"]: r for r in check_pages(mech, wiki, titles, [1, 2, 3, 4, 5, 6, 7])}
+        self.assertEqual(rows[1]["outcome"], "same")
+        self.assertEqual(rows[2]["outcome"], "none")
+        self.assertEqual((rows[3]["outcome"], rows[3]["wiki_id"]), ("ok", 50))
+        self.assertEqual((rows[4]["outcome"], rows[4]["wiki_id"], rows[4]["template_ref"]), ("unresolved", None, "לא קיים"))
+        self.assertEqual((rows[5]["outcome"], rows[5]["wiki_id"]), ("ok", 51))
+        self.assertEqual(rows[6]["outcome"], "none")
+        self.assertEqual(rows[7], {"mech_id": 7, "outcome": "denied"})   # נעול: בידוד בחיפוש בינארי, בלי לפגוע בשאר
+
+    def test_wiki_response_missing_a_title_fails(self):
+        from collector.templates import resolve_wiki_titles
+
+        class Mw:
+            def get(self, params):
+                return {"query": {"pages": []}}
+        with self.assertRaises(RuntimeError):
+            resolve_wiki_titles(Mw(), ["כותרת"])
+
+
 if __name__ == "__main__":
     unittest.main()
