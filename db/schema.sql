@@ -72,7 +72,7 @@ CREATE FUNCTION api.enrich_pending(p_group text, p_after bigint DEFAULT 0, p_lim
     SET search_path TO ''
     AS $$
 begin
-    if p_group not in ('created', 'length', 'desc', 'redirect') then
+    if p_group not in ('created', 'length', 'desc', 'redirect', 'locks') then
         raise exception 'bad group %', p_group using errcode = '22023';
     end if;
     return query
@@ -81,10 +81,13 @@ begin
     join mirror.wiki_page w on w.page_id = g.wiki_id
     left join enrich.wiki_enrichment e on e.wiki_id = g.wiki_id
     where g.kind = 'missing' and g.wiki_id > p_after
+      and not exists (select 1 from work.exclusion x where x.kind in ('import_excluded', 'locked_create')
+                      and (x.wiki_id = g.wiki_id or x.title = w.title))
       and case p_group
               when 'created'  then e.created_checked_at is null
               when 'length'   then e.length_checked_at is null or e.length_checked_at < now() - interval '7 days'
               when 'desc'     then e.desc_checked_at is null or e.desc_checked_at < now() - interval '30 days'
+              when 'locks'    then e.locks_checked_at is null or e.locks_checked_at < now() - interval '30 days'
               else                 e.redirect_checked_at is null or e.redirect_checked_at < now() - interval '1 day'
           end
     order by g.wiki_id
@@ -348,6 +351,8 @@ CREATE FUNCTION api.scan_pending(p_after bigint DEFAULT 0, p_limit integer DEFAU
     left join enrich.wiki_enrichment e on e.wiki_id = g.wiki_id
     left join enrich.content_scan s on s.wiki_id = g.wiki_id
     where g.kind = 'missing' and g.wiki_id > p_after
+      and not exists (select 1 from work.exclusion x where x.kind in ('import_excluded', 'locked_create')
+                      and (x.wiki_id = g.wiki_id or x.title = w.title))
     order by g.wiki_id
     limit p_limit;
 $$;
@@ -423,6 +428,23 @@ begin
         select r.wiki_id, r.wikidata_desc, now()
         from jsonb_to_recordset(p_rows) as r(wiki_id bigint, wikidata_desc text)
         on conflict (wiki_id) do update set wikidata_desc = excluded.wikidata_desc, desc_checked_at = now();
+    elsif p_group = 'locks' then
+        -- p_rows: [{wiki_id, title, allevel, pageid}]. create: כותרת שאי אפשר ליצור במכלול (החרגה, לא ייבוא);
+        -- read: דף קיים במכלול שנעול לקריאה (נעילה במקור אחד). none/אחר: רק נרשם שנבדק.
+        insert into work.exclusion (kind, title, reason)
+        select 'locked_create', r.title, 'allevel=create (זוהה אוטומטית)'
+        from jsonb_to_recordset(p_rows) as r(wiki_id bigint, title text, allevel text, pageid bigint)
+        where r.allevel = 'create' and r.title is not null
+        on conflict do nothing;
+        insert into work.page_lock (site, page_id, level, detected_by)
+        select 'mechalol', r.pageid, 'read', 'missing_check'
+        from jsonb_to_recordset(p_rows) as r(wiki_id bigint, title text, allevel text, pageid bigint)
+        where r.allevel = 'read' and r.pageid is not null
+        on conflict (site, page_id) do nothing;
+        insert into enrich.wiki_enrichment as e (wiki_id, locks_checked_at)
+        select r.wiki_id, now()
+        from jsonb_to_recordset(p_rows) as r(wiki_id bigint)
+        on conflict (wiki_id) do update set locks_checked_at = now();
     elsif p_group = 'redirect' then
         insert into enrich.wiki_enrichment as e (wiki_id, mech_redirect, redirect_checked_at)
         select r.wiki_id, r.mech_redirect, now()
@@ -1229,7 +1251,8 @@ CREATE TABLE enrich.wiki_enrichment (
     desc_checked_at timestamp with time zone,
     created_checked_at timestamp with time zone,
     length_checked_at timestamp with time zone,
-    redirect_checked_at timestamp with time zone
+    redirect_checked_at timestamp with time zone,
+    locks_checked_at timestamp with time zone
 );
 
 --

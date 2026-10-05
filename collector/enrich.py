@@ -4,12 +4,13 @@
   length   - אורך הדף (info, אצווה)
   desc     - תיאור בעברית מוויקינתונים (אצווה לפי sitelinks של hewiki)
   redirect - האם הכותרת קיימת במכלול כהפניה (info, אצווה, בלי מעקב הפניות)
+  locks    - רמת הנעילה במכלול (inprop=allevel): create = נעול ליצירה (החרגה), read = נעול לקריאה (v1: check_missing_locked.py)
 כישלון בבדיקה לא נשלח למסד ולכן אינו דורס ערך קודם; הדף נשאר ממתין ויבדק בריצה הבאה.
 """
 from .state import chunks
 
 BATCH = 50
-GROUPS = ("redirect", "length", "desc", "created")
+GROUPS = ("redirect", "locks", "length", "desc", "created")
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 
 
@@ -70,7 +71,27 @@ def fetch_created(wiki_mw, pages):
     return rows
 
 
-FETCHERS = {"length": ("wiki", fetch_length), "created": ("wiki", fetch_created),
+def fetch_locks(mech_mw, pages):
+    """{wiki_id, title, allevel, pageid}. allevel חסר = none. תשובה שאינה מכסה כותרת מפילה את הריצה."""
+    by_title = {p["title"]: p["wiki_id"] for p in pages}
+    data = mech_mw.get({"action": "query", "prop": "info", "inprop": "allevel", "titles": "|".join(by_title)})
+    query = data["query"]
+    original = {n["to"]: n["from"] for n in query.get("normalized", [])}
+    rows, seen = [], set()
+    for page in query["pages"]:
+        title = original.get(page.get("title"), page.get("title"))
+        wiki_id = by_title.get(title)
+        if wiki_id is None:
+            continue
+        seen.add(wiki_id)
+        rows.append({"wiki_id": wiki_id, "title": title, "allevel": page.get("allevel", "none"), "pageid": page.get("pageid")})
+    absent = sorted(set(by_title.values()) - seen)
+    if absent:
+        raise RuntimeError(f"המכלול לא החזיר תשובה עבור {len(absent)} כותרות, למשל {absent[:5]}")
+    return rows
+
+
+FETCHERS = {"locks": ("mech", fetch_locks), "length": ("wiki", fetch_length), "created": ("wiki", fetch_created),
             "desc": ("wikidata", fetch_desc), "redirect": ("mech", fetch_redirect)}
 
 

@@ -409,6 +409,15 @@ class EnrichTests(unittest.TestCase):
         rows = {r["wiki_id"]: r["wikidata_desc"] for r in fetch_desc(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])}
         self.assertEqual(rows, {1: "תיאור", 2: ""})
 
+    def test_locks(self):
+        from collector.enrich import fetch_locks
+        mw = self.Mw({"query": {"pages": [{"title": "א", "missing": True, "allevel": "create"}, {"title": "ב", "pageid": 9, "allevel": "read"},
+                                          {"title": "ג", "missing": True}]}})
+        rows = {r["wiki_id"]: (r["allevel"], r["pageid"]) for r in fetch_locks(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}, {"wiki_id": 3, "title": "ג"}])}
+        self.assertEqual(rows, {1: ("create", None), 2: ("read", 9), 3: ("none", None)})
+        with self.assertRaises(RuntimeError):
+            fetch_locks(self.Mw({"query": {"pages": []}}), [{"wiki_id": 1, "title": "א"}])
+
     def test_created(self):
         from collector.enrich import fetch_created
         mw = self.Mw(lambda p: {"query": {"pages": [{"title": p["titles"], "revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}
