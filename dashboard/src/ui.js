@@ -116,6 +116,18 @@ function createApp(root, client, env) {
 		return String(v);
 	}
 
+	// תא עם עיצוב: רמה כתגית צבע, כן/לא כסימן, תאריך קצר, ריק כמקף עדין
+	function cellNode(col, row) {
+		if (col.computed) {
+			var level = rowLevel(row, state.method, state.mode);
+			return h('td', {}, [level ? h('span', { 'class': 'mchl2-level mchl2-' + level, text: LEVEL_LABELS[level] || level }) : h('span', { 'class': 'mchl2-muted', text: '—' })]);
+		}
+		var v = row[col.key];
+		if (typeof v === 'boolean') return h('td', {}, [v ? h('span', { 'class': 'mchl2-check', text: '✓' }) : h('span', { 'class': 'mchl2-muted', text: '—' })]);
+		var text = cellText(col, row);
+		return h('td', {}, [text === '' ? h('span', { 'class': 'mchl2-muted', text: '—' }) : text]);
+	}
+
 	function controls() {
 		var t = tab();
 		var box = h('div', { 'class': 'mchl2-controls' });
@@ -257,19 +269,26 @@ function createApp(root, client, env) {
 			var key = t.rowKey ? t.rowKey(row) : row.id;
 			var cells = t.columns.map(function (c, i) {
 				if (i === 0 && (t.wiki || t.mech || c.key === 'title')) return h('td', {}, [titleCell(row, t)]);
-				return h('td', { text: cellText(c, row) });
+				return cellNode(c, row);
 			});
 			body.appendChild(h('tr', { 'data-key': key }, cells.concat([h('td', {}, [actionsCell(row, t)])])));
 			if (t.details && state.expanded[row.id]) body.appendChild(detailsRow(row, t.columns.length + 1));
 		});
-		return h('table', { 'class': 'mchl2-table' }, [h('thead', {}, [head]), body]);
+		if (!state.rows.length) {
+			if (state.loading) {
+				for (var i = 0; i < 8; i++) body.appendChild(h('tr', {}, t.columns.concat([{}]).map(function () { return h('td', {}, [h('div', { 'class': 'mchl2-skel' })]); })));
+			} else if (!state.error) {
+				body.appendChild(h('tr', {}, [h('td', { colspan: t.columns.length + 1 }, [h('div', { 'class': 'mchl2-empty' }, [h('b', { text: 'אין תוצאות' }), 'נסו לשנות את החיפוש או הסינון.'])])]));
+			}
+		}
+		return h('div', { 'class': 'mchl2-tablewrap' }, [h('table', { 'class': 'mchl2-table' }, [h('thead', {}, [head]), body])]);
 	}
 
 	function pager() {
 		var pages = state.count === null ? null : Math.max(1, Math.ceil(state.count / CONFIG.pageSize));
 		return h('div', { 'class': 'mchl2-pager' }, [
 			h('button', { 'class': 'mchl2-btn', text: 'הקודם', disabled: state.page === 0 ? 'disabled' : null, onclick: function () { state.page--; load(); } }),
-			h('span', { text: ' עמוד ' + (state.page + 1) + (pages ? ' מתוך ' + pages : '') + (state.count !== null ? ' | ' + state.count.toLocaleString('he-IL') + ' שורות' : '') + ' ' }),
+			h('span', { text: 'עמוד ' + (state.page + 1) + (pages ? ' מתוך ' + pages : '') + (state.count !== null ? ' · ' + state.count.toLocaleString('he-IL') + ' שורות' : '') }),
 			h('button', { 'class': 'mchl2-btn', text: 'הבא', disabled: (pages !== null ? state.page + 1 >= pages : state.rows.length < CONFIG.pageSize) ? 'disabled' : null, onclick: function () { state.page++; load(); } })
 		]);
 	}
@@ -321,21 +340,27 @@ function createApp(root, client, env) {
 		if (t.special === 'requests') return requestsView();
 		if (t.special === 'culture') return cultureView();
 		if (t.special === 'stats') {
-			return h('table', { 'class': 'mchl2-table' }, state.rows.map(function (r) {
-				return h('tr', {}, [h('td', { text: STAT_LABELS[r.key] || r.key }), h('td', { text: Number(r.n).toLocaleString('he-IL') }), h('td', { 'class': 'mchl2-muted', dir: 'ltr', title: 'מגמה לפי ימים', text: sparkline(((state.history || {})[r.key] || []).slice(-30)) }), h('td', { 'class': 'mchl2-muted', text: String(r.updated_at || '').slice(0, 16).replace('T', ' ') })]);
+			return h('div', { 'class': 'mchl2-stats' }, state.rows.map(function (r) {
+				return h('div', { 'class': 'mchl2-stat' }, [
+					h('div', { 'class': 'mchl2-stat-label', text: STAT_LABELS[r.key] || r.key }),
+					h('div', { 'class': 'mchl2-stat-n', text: Number(r.n).toLocaleString('he-IL') }),
+					h('div', { 'class': 'mchl2-spark', title: 'מגמה לפי ימים', text: sparkline(((state.history || {})[r.key] || []).slice(-30)) }),
+					h('div', { 'class': 'mchl2-muted' }, ['עודכן ', h('bdi', { text: String(r.updated_at || '').slice(0, 16).replace('T', ' ') })])
+				]);
 			}));
 		}
 		var names = { sync: 'סנכרון', reconcile: 'reconcile', enrich: 'העשרה', scan: 'סינון', maintenance: 'תחזוקה', rebuild: 'טעינה' };
 		var hl = { ok: 'תקין', stale: 'ישן', stuck: 'תקוע', never: 'טרם רץ' };
-		return h('table', { 'class': 'mchl2-table' }, [h('tr', {}, ['סוג', 'מצב', 'סטטוס אחרון', 'הצלחה אחרונה', 'שגיאה'].map(function (x) { return h('th', { text: x }); }))].concat(state.rows.map(function (r) {
-			return h('tr', {}, [h('td', { text: names[r.kind] || r.kind }), h('td', { 'class': r.health !== 'ok' ? 'mchl2-error' : '', text: hl[r.health] || r.health }),
+		var hlClass = { ok: 'mchl2-ok', stale: 'mchl2-warn', stuck: 'mchl2-bad', never: 'mchl2-pill' };
+		return h('div', { 'class': 'mchl2-tablewrap' }, [h('table', { 'class': 'mchl2-table' }, [h('thead', {}, [h('tr', {}, ['סוג', 'מצב', 'סטטוס אחרון', 'הצלחה אחרונה', 'שגיאה'].map(function (x) { return h('th', { text: x }); }))]), h('tbody', {}, state.rows.map(function (r) {
+			return h('tr', {}, [h('td', { text: names[r.kind] || r.kind }), h('td', {}, [h('span', { 'class': 'mchl2-pill ' + (hlClass[r.health] || ''), text: hl[r.health] || r.health })]),
 				h('td', { text: r.status }), h('td', { text: String(r.last_success_at || '').slice(0, 16).replace('T', ' ') }), h('td', { 'class': 'mchl2-muted', text: String(r.error || '').slice(0, 80) })]);
-		})));
+		}))])]);
 	}
 
 	function authBox() {
 		if (client.isLoggedIn()) {
-			return h('span', {}, [h('span', { 'class': 'mchl2-muted', text: (client.email() || '') + (state.admin ? ' (מנהל) ' : ' (לא מנהל) ') }),
+			return h('span', { 'class': 'mchl2-user' }, [h('span', { 'class': 'mchl2-chip', text: state.admin ? 'מנהל' : 'לא מנהל' }), h('span', { text: client.email() || '' }),
 				h('button', { 'class': 'mchl2-btn', text: 'התנתקות', onclick: function () { client.logout(); state.admin = false; render(); } })]);
 		}
 		return h('button', { 'class': 'mchl2-btn', text: 'התחברות מנהל', onclick: function () {
@@ -352,25 +377,32 @@ function createApp(root, client, env) {
 	function render() {
 		var t = tab();
 		var top = h('div', { 'class': 'mchl2-top' }, [
-			h('b', { text: 'ניהול ייבוא' }), ' ',
-			h('label', {}, ['שיטה: ', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.method = e.target.value; render(); } },
-				[['list', 'לפי רשימה'], ['ctx', 'לפי הקשר']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.method === o[0] ? 'selected' : null }); }))]), ' ',
-			h('label', {}, ['רשימות: ', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.mode = e.target.value; render(); } },
-				[['a', 'מאושרות'], ['s', 'כולל הצעות']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.mode === o[0] ? 'selected' : null }); }))]), ' ',
+			h('div', { 'class': 'mchl2-brand' }, [h('span', { 'class': 'mchl2-logo', text: '⇄' }), h('span', { text: 'ניהול ייבוא' })]),
+			h('label', {}, ['שיטה', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.method = e.target.value; render(); } },
+				[['list', 'לפי רשימה'], ['ctx', 'לפי הקשר']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.method === o[0] ? 'selected' : null }); }))]),
+			h('label', {}, ['רשימות', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.mode = e.target.value; render(); } },
+				[['a', 'מאושרות'], ['s', 'כולל הצעות']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.mode === o[0] ? 'selected' : null }); }))]),
 			authBox()
 		]);
-		var groups = h('div', { 'class': 'mchl2-groups' }, TAB_GROUPS.map(function (g) {
-			return h('div', {}, [h('span', { 'class': 'mchl2-muted', text: g.label + ': ' })].concat(g.tabs.map(function (k) {
+		var nav = h('nav', { 'class': 'mchl2-nav' }, TAB_GROUPS.map(function (g) {
+			return h('div', { 'class': 'mchl2-nav-group' }, [h('div', { 'class': 'mchl2-nav-title', text: g.label })].concat(g.tabs.map(function (k) {
 				return h('button', { 'class': 'mchl2-tab' + (state.tab === k ? ' mchl2-on' : ''), text: TABS[k].label, onclick: function () { state.tab = k; state.page = 0; state.filters = {}; state.search = ''; state.rows = []; state.count = null; state.notice = ''; load(); } });
 			})));
 		}));
 		var main = [];
 		if (state.notice) main.push(h('div', { 'class': 'mchl2-notice', text: state.notice }));
 		if (state.error) main.push(h('div', { 'class': 'mchl2-error', text: 'שגיאה: ' + state.error }));
-		if (t.special) main.push(specialView());
-		else { main.push(controls()); if (state.loading) main.push(h('div', { 'class': 'mchl2-muted', text: 'טוען…' })); main.push(table()); main.push(pager()); }
+		var card = [h('div', { 'class': 'mchl2-cardhead' }, [h('h2', { text: t.label })])];
+		if (t.special) {
+			if (t.special === 'stats') main.push(h('div', { 'class': 'mchl2-cardhead' }, [h('h2', { text: t.label })]), specialView());
+			else { card.push(specialView()); main.push(h('div', { 'class': 'mchl2-card' }, card)); }
+		} else {
+			card.push(controls(), table(), pager());
+			main.push(h('div', { 'class': 'mchl2-card' }, card));
+		}
 		while (root.firstChild) root.removeChild(root.firstChild);
-		[top, groups].concat(main).forEach(function (n) { root.appendChild(n); });
+		root.appendChild(top);
+		root.appendChild(h('div', { 'class': 'mchl2-body' }, [nav, h('main', { 'class': 'mchl2-main' }, main)]));
 	}
 
 	return { start: function () { render(); return Promise.all([load(), client.isLoggedIn() ? checkAdmin() : null]); }, state: state };
