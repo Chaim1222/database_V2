@@ -3576,3 +3576,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA work GRANT ALL ON TABLES TO service_role;
 --
 -- PostgreSQL database dump complete
 --
+
