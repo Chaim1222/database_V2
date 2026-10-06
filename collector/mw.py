@@ -10,6 +10,14 @@ BATCH = 50
 POST_THRESHOLD = 600   # תווים לפני קידוד; מעליו POST
 
 
+def query_field(data, key, kind=list):
+    """תשובה חסרה היא כשל, לא הוכחה שהמקור ריק."""
+    query = data.get("query") if isinstance(data, dict) else None
+    if not isinstance(query, dict) or not isinstance(query.get(key), kind):
+        raise RuntimeError(f"תשובת API חסרה או לא תקינה: query.{key}")
+    return query[key]
+
+
 class MediaWiki:
     def __init__(self, api_url, session=None, sleep=time.sleep):
         self.api_url = api_url
@@ -37,6 +45,8 @@ class MediaWiki:
                     raise requests.RequestException(f"HTTP {response.status_code}")
                 response.raise_for_status()
                 data = response.json()
+                if not isinstance(data, dict):
+                    raise RuntimeError("תשובת API אינה אובייקט")
                 if data.get("error", {}).get("code") == "maxlag":
                     raise requests.RequestException("maxlag")
                 if "error" in data:
@@ -51,7 +61,7 @@ class MediaWiki:
         params = dict(params)
         while True:
             data = self.get(params)
-            yield from data.get("query", {}).get(list_key, [])
+            yield from query_field(data, list_key)
             if "continue" not in data:
                 return
             params.update(data["continue"])
@@ -107,15 +117,21 @@ class MediaWiki:
         """{page_id: set(קטגוריות)} (קטגוריות של הדף עצמו, לא כולל תבניות)."""
         result = {i: set() for i in ids}
         for part in chunks(sorted(ids), BATCH):
+            seen = set()
             params = {"action": "query", "prop": "categories", "cllimit": "max",
                       "pageids": "|".join(map(str, part))}
             while True:
                 data = self.get(params)
-                for page in data["query"]["pages"]:
+                for page in query_field(data, "pages"):
+                    if page.get("missing") or page.get("invalid") or page.get("pageid") not in part:
+                        raise RuntimeError("תשובת קטגוריות חסרה או לא תואמת לדף חי")
+                    seen.add(page["pageid"])
                     result.setdefault(page.get("pageid"), set()).update(c["title"] for c in page.get("categories", []))
                 if "continue" not in data:
                     break
                 params.update(data["continue"])
+            if seen != set(part):
+                raise RuntimeError(f"תשובת קטגוריות אינה מכסה את כל הדפים: {sorted(set(part) - seen)[:5]}")
         return result
 
     def all_pages(self):

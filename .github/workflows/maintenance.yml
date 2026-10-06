@@ -9,6 +9,7 @@ on:
 concurrency:
   group: v2-db-write
   cancel-in-progress: false
+  queue: max
 
 jobs:
   maintenance:

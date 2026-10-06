@@ -7,9 +7,9 @@ const { createClient } = require('../src/api-client.js');
 const { TABS, rowLevel } = require('../src/tabs.js');
 
 test('levelParams: רשימה והקשר', () => {
-	assert.deepStrictEqual(levelParams('list', 'a', 'problem'), [['verdict_list_a', 'eq.problem']]);
-	assert.deepStrictEqual(levelParams('ctx', 's', 'high'), [['verdict_ctx_s', 'eq.review'], ['suspicion_s', 'eq.high']]);
-	assert.deepStrictEqual(levelParams('ctx', 'a', 'clean'), [['verdict_ctx_a', 'eq.clean']]);
+	assert.deepStrictEqual(levelParams('list', 'a', 'problem'), [['scan_state', 'eq.scanned'], ['verdict_list_a', 'eq.problem']]);
+	assert.deepStrictEqual(levelParams('ctx', 's', 'high'), [['scan_state', 'eq.scanned'], ['verdict_ctx_s', 'eq.review'], ['suspicion_s', 'eq.high']]);
+	assert.deepStrictEqual(levelParams('ctx', 'a', 'clean'), [['scan_state', 'eq.scanned'], ['verdict_ctx_a', 'eq.clean']]);
 	assert.deepStrictEqual(levelParams('list', 'a', 'not_scanned'), [['scan_state', 'eq.not_scanned']]);
 	assert.deepStrictEqual(levelParams('list', 'a', ''), []);
 });
@@ -31,6 +31,10 @@ test('rowLevel לפי שיטה ומצב', () => {
 	assert.strictEqual(rowLevel(r, 'ctx', 'a'), 'low');
 	assert.strictEqual(rowLevel(r, 'list', 's'), 'problem');
 	assert.strictEqual(rowLevel({ scan_state: 'not_scanned' }, 'list', 'a'), 'not_scanned');
+	for (const method of ['list', 'ctx']) for (const mode of ['a', 's']) {
+		assert.strictEqual(rowLevel({ ...r, scan_state: 'stale', ['verdict_' + method + '_' + mode]: 'clean' }, method, mode), 'stale');
+		assert.deepStrictEqual(levelParams(method, mode, 'clean')[0], ['scan_state', 'eq.scanned']);
+	}
 });
 
 test('toCsv: BOM, מירכאות ושורות חדשות', () => {
@@ -92,6 +96,29 @@ test('התחברות, טוקן ב-rpc, ורענון על 401', async () => {
 });
 
 const { parseRequests, lookupTitles } = require('../src/live.js');
+test('התחברות ללא אחסון או עם אחסון חסום נשמרת עד יציאה', async () => {
+	for (const storage of [undefined, { getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); }, removeItem() { throw Error('blocked'); } }]) {
+		const f = fakeFetch([{ status: 200, body: { access_token: 'T', refresh_token: 'R', user: { email: 'a@b' } } }, { status: 200, body: true }]);
+		const c = createClient({ fetch: f, config: cfg, storage });
+		await c.login('a@b', 'pw');
+		assert.ok(c.isLoggedIn());
+		assert.strictEqual(c.email(), 'a@b');
+		await c.rpc('is_admin');
+		assert.strictEqual(f.calls[1].init.headers.Authorization, 'Bearer T');
+		c.logout();
+		assert.ok(!c.isLoggedIn());
+	}
+});
+
+test('שליפת משוב מזוהה מרעננת טוקן פעם אחת', async () => {
+	const f = fakeFetch([{ status: 200, body: { access_token: 'T1', refresh_token: 'R' } }, { status: 401, body: 'expired' },
+		{ status: 200, body: { access_token: 'T2', refresh_token: 'R2' } }, { status: 200, body: [] }]);
+	const c = createClient({ fetch: f, config: cfg });
+	await c.login('a@b', 'pw');
+	assert.deepStrictEqual((await c.select('word_filter_feedback', { authed: true })).data, []);
+	assert.strictEqual(f.calls[3].init.headers.Authorization, 'Bearer T2');
+});
+
 test('parseRequests: סטטוס, מבקש ותאריך; מרחבי שם אחרים מסוננים', () => {
 	const text = ['== [[ערך א]] ==', 'תודה. [[משתמש:דני]] 10:30, 5 באוקטובר 2026 (IDT)', ': {{בוצע}} [[משתמש:ג]] 12:00, 6 באוקטובר 2026',
 		'== [[קטגוריה:x]] ==', '== [[ערך ב]] ==', 'בבקשה --[[משתמש:רינה]] 11:00, 1 בספטמבר 2026', '=== תת-כותרת ===', ': ראינו'].join('\n');

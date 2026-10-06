@@ -143,11 +143,14 @@ def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, sess
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": {}, "p_error": str(exc)[:1000]})
         raise
-    report = {"run_id": run_key, "snapshot": {k: v for k, v in meta.items() if k == "watermarks"}, "sites": sites}
+    unexplained = sum(s["unexplained_pages"] for s in sites)
+    report = {"run_id": run_key, "snapshot": {k: v for k, v in meta.items() if k == "watermarks"}, "sites": sites, "ok": unexplained == 0}
     rpc.call("reconcile_record", {"p_snapshot_meta": meta, "p_summary": {s["site"]: {"classes": s["classes"], "unexplained_pages": s["unexplained_pages"],
                                                                                     "delete_rate": s["delete_rate"]} for s in sites},
                                   "p_findings": findings})
-    rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded", "p_stats": {s["site"]: s["unexplained_pages"] for s in sites}})
+    rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded" if report["ok"] else "failed",
+                                 "p_stats": {s["site"]: s["unexplained_pages"] for s in sites},
+                                 "p_error": None if report["ok"] else f"reconcile: {unexplained} unexplained pages; see recorded findings"})
     markdown = render_markdown(report)
     print(markdown)
     path = os.environ.get("GITHUB_STEP_SUMMARY")

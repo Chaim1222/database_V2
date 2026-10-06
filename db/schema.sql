@@ -1048,23 +1048,16 @@ CREATE FUNCTION ops.refresh_counts() RETURNS void
     AS $$
     insert into ops.dashboard_counts (key, n, updated_at)
     values
-        ('wiki_pages',   (select case when c.reltuples >= 0 then c.reltuples::bigint
-                                      else (select count(*) from mirror.wiki_page) end
-                           from pg_class c where c.oid = 'mirror.wiki_page'::regclass), now()),
-        ('mech_pages',   (select case when c.reltuples >= 0 then c.reltuples::bigint
-                                      else (select count(*) from mirror.mech_page) end
-                           from pg_class c where c.oid = 'mirror.mech_page'::regclass), now()),
-        ('missing',      (select count(*) from derived.wiki_gap g
-                           join mirror.wiki_page w on w.page_id = g.wiki_id
-                           where g.kind = 'missing'
-                             and not exists (select 1 from work.exclusion e
-                                             where e.kind in ('import_excluded', 'locked_create') and e.wiki_id = g.wiki_id)
-                             and not exists (select 1 from work.exclusion e
-                                             where e.kind in ('import_excluded', 'locked_create') and e.title = w.title)), now()),
-        ('rav_review',   (select count(*) from derived.wiki_gap where kind = 'rav_review'), now()),
-        ('locks',        (select count(*) from work.page_lock), now()),
-        ('rev_tasks',    (select count(*) from derived.rev_check c
-                           where not exists (select 1 from work.manual_link m where m.mech_id = c.mech_id)), now())
+        ('wiki_pages', (select n from ops.mirror_count where key = 'wiki_pages'), now()),
+        ('mech_pages', (select n from ops.mirror_count where key = 'mech_pages'), now()),
+        ('missing', (select count(*) from derived.wiki_gap g
+                     join mirror.wiki_page w on w.page_id = g.wiki_id
+                     where g.kind = 'missing'
+                       and not exists (select 1 from work.exclusion e where e.kind in ('import_excluded', 'locked_create') and e.wiki_id = g.wiki_id)
+                       and not exists (select 1 from work.exclusion e where e.kind in ('import_excluded', 'locked_create') and e.title = w.title)), now()),
+        ('rav_review', (select count(*) from derived.wiki_gap where kind = 'rav_review'), now()),
+        ('locks', (select count(*) from work.page_lock), now()),
+        ('rev_tasks', (select count(*) from api.v_rev_tasks), now())
     on conflict (key) do update set n = excluded.n, updated_at = excluded.updated_at;
 $$;
 
@@ -1081,6 +1074,24 @@ CREATE FUNCTION ops.snapshot_metrics() RETURNS void
     union all
     select (now() at time zone 'utc')::date, 'db_bytes', pg_database_size(current_database())
     on conflict (day, key) do update set n = excluded.n;
+$$;
+
+--
+-- Name: track_mirror_count(); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.track_mirror_count() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+declare v_delta bigint;
+begin
+    select count(*) into v_delta from changed_rows;
+    if TG_OP = 'DELETE' then v_delta := -v_delta; end if;
+    update ops.mirror_count set n = n + v_delta where key = TG_TABLE_NAME || 's';
+    if not found then raise exception 'missing exact mirror counter'; end if;
+    return null;
+end;
 $$;
 
 --
@@ -1844,6 +1855,17 @@ CREATE TABLE ops.health_threshold (
 );
 
 --
+-- Name: mirror_count; Type: TABLE; Schema: ops; Owner: -
+--
+
+CREATE TABLE ops.mirror_count (
+    key text NOT NULL,
+    n bigint NOT NULL,
+    CONSTRAINT mirror_count_key_check CHECK ((key = ANY (ARRAY['wiki_pages'::text, 'mech_pages'::text]))),
+    CONSTRAINT mirror_count_n_check CHECK ((n >= 0))
+);
+
+--
 -- Name: reconcile_finding; Type: TABLE; Schema: ops; Owner: -
 --
 
@@ -2083,6 +2105,13 @@ ALTER TABLE ONLY ops.metric_snapshot
     ADD CONSTRAINT metric_snapshot_pkey PRIMARY KEY (day, key);
 
 --
+-- Name: mirror_count mirror_count_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
+--
+
+ALTER TABLE ONLY ops.mirror_count
+    ADD CONSTRAINT mirror_count_pkey PRIMARY KEY (key);
+
+--
 -- Name: reconcile_finding reconcile_finding_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
 --
 
@@ -2262,6 +2291,30 @@ CREATE UNIQUE INDEX exclusion_title_idx ON work.exclusion USING btree (kind, tit
 --
 
 CREATE UNIQUE INDEX exclusion_wiki_idx ON work.exclusion USING btree (kind, wiki_id) WHERE (wiki_id IS NOT NULL);
+
+--
+-- Name: mech_page mech_count_delete; Type: TRIGGER; Schema: mirror; Owner: -
+--
+
+CREATE TRIGGER mech_count_delete AFTER DELETE ON mirror.mech_page REFERENCING OLD TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
+
+--
+-- Name: mech_page mech_count_insert; Type: TRIGGER; Schema: mirror; Owner: -
+--
+
+CREATE TRIGGER mech_count_insert AFTER INSERT ON mirror.mech_page REFERENCING NEW TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
+
+--
+-- Name: wiki_page wiki_count_delete; Type: TRIGGER; Schema: mirror; Owner: -
+--
+
+CREATE TRIGGER wiki_count_delete AFTER DELETE ON mirror.wiki_page REFERENCING OLD TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
+
+--
+-- Name: wiki_page wiki_count_insert; Type: TRIGGER; Schema: mirror; Owner: -
+--
+
+CREATE TRIGGER wiki_count_insert AFTER INSERT ON mirror.wiki_page REFERENCING NEW TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
 
 --
 -- Name: exclusion exclusion_refresh; Type: TRIGGER; Schema: work; Owner: -
@@ -2453,6 +2506,12 @@ ALTER TABLE ops.health_threshold ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE ops.metric_snapshot ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mirror_count; Type: ROW SECURITY; Schema: ops; Owner: -
+--
+
+ALTER TABLE ops.mirror_count ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: dashboard_counts public_read; Type: POLICY; Schema: ops; Owner: -
@@ -2902,6 +2961,13 @@ GRANT ALL ON FUNCTION ops.refresh_counts() TO service_role;
 GRANT ALL ON FUNCTION ops.snapshot_metrics() TO service_role;
 
 --
+-- Name: FUNCTION track_mirror_count(); Type: ACL; Schema: ops; Owner: -
+--
+
+REVOKE ALL ON FUNCTION ops.track_mirror_count() FROM PUBLIC;
+GRANT ALL ON FUNCTION ops.track_mirror_count() TO service_role;
+
+--
 -- Name: FUNCTION after_exclusion_change(); Type: ACL; Schema: work; Owner: -
 --
 
@@ -3267,6 +3333,12 @@ GRANT ALL ON SEQUENCE mirror.page_event_id_seq TO service_role;
 GRANT ALL ON TABLE ops.health_threshold TO service_role;
 GRANT SELECT ON TABLE ops.health_threshold TO anon;
 GRANT SELECT ON TABLE ops.health_threshold TO authenticated;
+
+--
+-- Name: TABLE mirror_count; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.mirror_count TO service_role;
 
 --
 -- Name: TABLE reconcile_finding; Type: ACL; Schema: ops; Owner: -

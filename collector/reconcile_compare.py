@@ -62,7 +62,8 @@ def _paged(api_get, params, list_key):
     params = dict(params)
     while True:
         data = api_get(params)
-        yield from data.get("query", {}).get(list_key, [])
+        from .mw import query_field
+        yield from query_field(data, list_key)
         cont = data.get("continue")
         if not cont:
             return

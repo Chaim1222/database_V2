@@ -78,7 +78,7 @@ var STAT_LABELS = { wiki_pages: 'דפי ויקיפדיה', mech_pages: 'ערכי
 
 // הרמה המוצגת לשורה לפי השיטה והמצב שנבחרו
 function rowLevel(row, method, mode) {
-	if (row.scan_state === 'not_scanned') return 'not_scanned';
+	if (row.scan_state === 'not_scanned' || row.scan_state === 'stale') return row.scan_state;
 	var level = row[(method === 'ctx' ? 'verdict_ctx_' : 'verdict_list_') + mode];
 	if (method === 'ctx' && level === 'review') return row['suspicion_' + mode] || 'review';
 	return level || '';
