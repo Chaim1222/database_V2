@@ -10,7 +10,7 @@ run() { "${RUN[@]}" "$1"; }
 cleanup() { run "psql -X -q -d postgres -c 'drop database if exists $DB'" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 run "psql -X -q -d postgres -c 'create database $DB'" >/dev/null
-apply() { run "psql -X -q -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$1'" ; }
+apply() { run "psql -X -q -1 -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$1'" ; }
 apply tests/00_supabase_stub.sql
 for f in migrations/*.sql; do echo "migration: $f"; apply "$f"; done
 fail=0
