@@ -1058,8 +1058,9 @@ CREATE FUNCTION ops.refresh_counts() RETURNS void
                            join mirror.wiki_page w on w.page_id = g.wiki_id
                            where g.kind = 'missing'
                              and not exists (select 1 from work.exclusion e
-                                             where e.kind in ('import_excluded', 'locked_create')
-                                               and (e.wiki_id = g.wiki_id or e.title = w.title))), now()),
+                                             where e.kind in ('import_excluded', 'locked_create') and e.wiki_id = g.wiki_id)
+                             and not exists (select 1 from work.exclusion e
+                                             where e.kind in ('import_excluded', 'locked_create') and e.title = w.title)), now()),
         ('rav_review',   (select count(*) from derived.wiki_gap where kind = 'rav_review'), now()),
         ('locks',        (select count(*) from work.page_lock), now()),
         ('rev_tasks',    (select count(*) from derived.rev_check c
