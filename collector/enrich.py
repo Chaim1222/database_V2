@@ -93,8 +93,15 @@ def fetch_created(wiki_mw, pages):
     rows = []
     for p in pages:
         time.sleep(CREATED_PACE)   # בקשה לכל כותרת (25 אלף ויותר): הקצב מונע 429 מוויקיפדיה
-        data = wiki_mw.get({"action": "query", "prop": "revisions", "titles": p["title"],
-                            "rvprop": "timestamp", "rvlimit": 1, "rvdir": "newer"})
+        try:
+            data = wiki_mw.get({"action": "query", "prop": "revisions", "titles": p["title"],
+                                "rvprop": "timestamp", "rvlimit": 1, "rvdir": "newer"})
+        except requests.RequestException as exc:   # כמו ב-v1: כשל זמני בכותרת בודדת מדולג וייבדק בריצה הבאה; הרבה כשלים = בעיה כללית
+            SKIP_BUDGET["left"] -= 1
+            if SKIP_BUDGET["left"] < 0:
+                raise RuntimeError("יותר מדי כותרות נכשלו בשליפת תאריך יצירה: כנראה הגבלה או חסימה כללית") from exc
+            print(f"תאריך יצירה: כשל על {p['title']!r} ({exc}), מדלג")
+            continue
         page = (data["query"]["pages"] or [{}])[0]
         revisions = page.get("revisions") or []
         rows.append({"wiki_id": p["wiki_id"], "created_at": revisions[0]["timestamp"] if revisions and not page.get("missing") else None})

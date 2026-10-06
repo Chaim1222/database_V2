@@ -502,6 +502,26 @@ class EnrichTests(unittest.TestCase):
         self.assertNotIn("sync_apply_enrichment", [c[0] for c in rpc2.calls])
 
 
+    def test_fetch_created_skips_transient_failure(self):
+        import requests
+        from collector import enrich
+        enrich.CREATED_PACE = 0
+        enrich.SKIP_BUDGET["left"] = 1
+
+        class Mw:
+            def get(self, params):
+                if params["titles"] == "ב":
+                    raise requests.RequestException("HTTP 429")
+                return {"query": {"pages": [{"revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}]}}
+        rows = enrich.fetch_created(Mw(), [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}, {"wiki_id": 3, "title": "ג"}])
+        self.assertEqual([r["wiki_id"] for r in rows], [1, 3])
+        self.assertEqual(enrich.SKIP_BUDGET["left"], 0)
+        enrich.SKIP_BUDGET["left"] = 0
+        with self.assertRaises(RuntimeError):
+            enrich.fetch_created(Mw(), [{"wiki_id": 2, "title": "ב"}])
+        enrich.SKIP_BUDGET["left"] = 20
+
+
 class ImportV1Tests(unittest.TestCase):
     def test_read_v1_pages_and_dry_run(self):
         from collector import import_v1
