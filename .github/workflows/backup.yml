@@ -21,7 +21,9 @@ jobs:
           sudo apt-get install -y -q postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -q postgresql-client-17
-          pg_dump --version
+          # /usr/bin/pg_dump הוא עטיפה שבוחרת 16; מצביעים ישירות על 17
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
       - name: גיבוי
         env:
           DB_URL: ${{ secrets.V2_DB_URL }}
