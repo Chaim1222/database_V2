@@ -7,11 +7,37 @@
   locks    - רמת הנעילה במכלול (inprop=allevel): create = נעול ליצירה (החרגה), read = נעול לקריאה (v1: check_missing_locked.py)
 כישלון בבדיקה לא נשלח למסד ולכן אינו דורס ערך קודם; הדף נשאר ממתין ויבדק בריצה הבאה.
 """
+import requests
+
 from .state import chunks
 
 BATCH = 50
 GROUPS = ("redirect", "locks", "length", "desc", "created")
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+
+SKIP_BUDGET = {"left": 20}   # כמה כותרות בודדות מותר לדלג עליהן (403) בריצת העשרה אחת; יותר מזה = חסימה כללית, והריצה נכשלת
+
+
+def query_titles(mw, titles, extra, log=print):
+    """שאילתת action=query לפי כותרות. HTTP 403 על מנה (חסימת סינון של האתר לכותרת מסוימת) מפוצל לחצאים עד הכותרת הבודדת,
+    שמדולגת ונרשמת. מחזיר (pages, normalized, skipped)."""
+    try:
+        data = mw.get({"action": "query", "titles": "|".join(titles), **extra})
+        query = data["query"]
+        return query["pages"], query.get("normalized", []), []
+    except requests.HTTPError as exc:
+        if exc.response is None or exc.response.status_code != 403:
+            raise
+        if len(titles) == 1:
+            SKIP_BUDGET["left"] -= 1
+            if SKIP_BUDGET["left"] < 0:
+                raise RuntimeError("יותר מדי כותרות נחסמו (403): כנראה חסימה כללית של הכתובת") from exc
+            log(f"403 על כותרת בודדת, מדלג: {titles[0]!r}")
+            return [], [], list(titles)
+        mid = len(titles) // 2
+        a = query_titles(mw, titles[:mid], extra, log)
+        b = query_titles(mw, titles[mid:], extra, log)
+        return a[0] + b[0], a[1] + b[1], a[2] + b[2]
 
 
 def fetch_length(wiki_mw, pages):
@@ -29,11 +55,10 @@ def fetch_length(wiki_mw, pages):
 def fetch_redirect(mech_mw, pages):
     """{wiki_id, mech_redirect}: True אם הכותרת במכלול היא הפניה; False אם חסרה או דף רגיל. תשובה חסרה נכשלת."""
     by_title = {p["title"]: p["wiki_id"] for p in pages}
-    data = mech_mw.get({"action": "query", "prop": "info", "titles": "|".join(by_title)})
-    query = data["query"]
-    original = {n["to"]: n["from"] for n in query.get("normalized", [])}
-    rows, seen = [], set()
-    for page in query["pages"]:
+    pages_out, normalized, skipped = query_titles(mech_mw, list(by_title), {"prop": "info"})
+    original = {n["to"]: n["from"] for n in normalized}
+    rows, seen = [], {by_title[t] for t in skipped}
+    for page in pages_out:
         title = original.get(page["title"], page["title"])
         wiki_id = by_title.get(title)
         if wiki_id is None:
@@ -74,11 +99,10 @@ def fetch_created(wiki_mw, pages):
 def fetch_locks(mech_mw, pages):
     """{wiki_id, title, allevel, pageid}. allevel חסר = none. תשובה שאינה מכסה כותרת מפילה את הריצה."""
     by_title = {p["title"]: p["wiki_id"] for p in pages}
-    data = mech_mw.get({"action": "query", "prop": "info", "inprop": "allevel", "titles": "|".join(by_title)})
-    query = data["query"]
-    original = {n["to"]: n["from"] for n in query.get("normalized", [])}
-    rows, seen = [], set()
-    for page in query["pages"]:
+    pages_out, normalized, skipped = query_titles(mech_mw, list(by_title), {"prop": "info", "inprop": "allevel"})
+    original = {n["to"]: n["from"] for n in normalized}
+    rows, seen = [], {by_title[t] for t in skipped}
+    for page in pages_out:
         title = original.get(page.get("title"), page.get("title"))
         wiki_id = by_title.get(title)
         if wiki_id is None:
@@ -99,6 +123,7 @@ def run_group(group, clients, rpc, limit=None, log=print):
     """clients: {"wiki": MediaWiki, "mech": MediaWiki, "wikidata": MediaWiki}. ממשיך עד שאין ממתינים."""
     kind, fetch = FETCHERS[group]
     client = clients[kind]
+    SKIP_BUDGET["left"] = 20
     after, done = 0, 0
     while True:
         pending = rpc.call("enrich_pending", {"p_group": group, "p_after": after, "p_limit": 500}) or []

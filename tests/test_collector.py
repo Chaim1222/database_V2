@@ -551,6 +551,50 @@ class ImportV1Tests(unittest.TestCase):
         self.assertTrue(all(sum(1 for p in import_v1.KEYS.values() if c[p]) == 1 for c in rpc.calls))
 
 
+class EnrichBlockedTitleTests(unittest.TestCase):
+    class Mw:
+        """מחזיר 403 לכל בקשה שמכילה את הכותרת החסומה."""
+        def __init__(self, blocked):
+            self.blocked = blocked
+            self.calls = 0
+
+        def get(self, params):
+            import requests
+            self.calls += 1
+            titles = params["titles"].split("|")
+            if self.blocked in titles:
+                resp = requests.Response()
+                resp.status_code = 403
+                raise requests.HTTPError("403", response=resp)
+            return {"query": {"pages": [{"title": t, "pageid": i + 1} for i, t in enumerate(titles)]}}
+
+    def test_bisect_skips_only_the_blocked_title(self):
+        from collector import enrich
+        pages = [{"wiki_id": i, "title": f"כ{i}"} for i in range(10)]
+        mw = self.Mw("כ7")
+        rows = enrich.fetch_redirect(mw, pages)
+        self.assertEqual(sorted(r["wiki_id"] for r in rows), [i for i in range(10) if i != 7])
+        self.assertLess(mw.calls, 12)
+
+    def test_general_block_fails_the_run(self):
+        from collector import enrich
+        enrich.SKIP_BUDGET["left"] = 2
+        class All(self.Mw):
+            def get(self, params):
+                self.blocked = params["titles"].split("|")[0]
+                return super().get(params)
+        pages = [{"wiki_id": i, "title": f"כ{i}"} for i in range(8)]
+        class Always:
+            def get(self, params):
+                import requests
+                resp = requests.Response()
+                resp.status_code = 403
+                raise requests.HTTPError("403", response=resp)
+        with self.assertRaises(RuntimeError):
+            enrich.fetch_redirect(Always(), pages)
+        enrich.SKIP_BUDGET["left"] = 20
+
+
 class ReconcileTests(unittest.TestCase):
     def test_reconcile_report_and_findings(self):
         from collector.reconcile import run_reconcile
