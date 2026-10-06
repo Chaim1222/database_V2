@@ -4,13 +4,14 @@
 function levelParams(method, mode, value) {
 	if (!value) return [];
 	if (value === 'not_scanned' || value === 'stale') return [['scan_state', 'eq.' + value]];
+	var fresh = [['scan_state', 'eq.scanned']];
 	if (method === 'ctx') {
 		if (value === 'high' || value === 'medium' || value === 'low') {
-			return [['verdict_ctx_' + mode, 'eq.review'], ['suspicion_' + mode, 'eq.' + value]];
+			return fresh.concat([['verdict_ctx_' + mode, 'eq.review'], ['suspicion_' + mode, 'eq.' + value]]);
 		}
-		return [['verdict_ctx_' + mode, 'eq.' + value]];
+		return fresh.concat([['verdict_ctx_' + mode, 'eq.' + value]]);
 	}
-	return [['verdict_list_' + mode, 'eq.' + value]];
+	return fresh.concat([['verdict_list_' + mode, 'eq.' + value]]);
 }
 
 function escapeIlike(text) {

@@ -4,7 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 let chromium;
-try { ({ chromium } = require('playwright')); } catch (e) { console.log('SKIP: playwright לא זמין'); process.exit(0); }
+try { ({ chromium } = require('playwright')); } catch (e) { console.log('SKIP: playwright לא זמין'); process.exit(process.env.REQUIRE_BROWSER ? 1 : 0); }
 
 const BUILT = path.join(__dirname, '..', 'dist', 'gadget-dashboard.js');
 const MISSING = [
@@ -13,7 +13,7 @@ const MISSING = [
 ];
 
 (async () => {
-	const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
+	const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || chromium.executablePath(), args: ['--no-sandbox'] });
 	const page = await browser.newPage();
 	const requests = [];
 	const errors = [];
@@ -70,6 +70,32 @@ const MISSING = [
 	await page.waitForTimeout(200);
 	const filtered = requests.filter((r) => r.path.endsWith('/v_missing')).pop();
 	checks.push(['סינון הקשר ושדה חשד', /verdict_ctx_a=eq\.review/.test(filtered.query) && /suspicion_a=eq\.high/.test(filtered.query)]);
+	checks.push(['רמה מחייבת סריקה עדכנית', /scan_state=eq\.scanned/.test(filtered.query)]);
+	await page.selectOption('.mchl2-top select >> nth=0', 'list');
+	await page.waitForTimeout(200);
+	const cleared = requests.filter((r) => r.path.endsWith('/v_missing')).at(-1);
+	checks.push(['דרגת חשד שאינה קיימת ברשימה מתאפסת', await page.inputValue('.mchl2-controls select >> nth=0') === '' && !/verdict_list_a=eq\.high/.test(cleared.query)]);
+	await page.selectOption('.mchl2-top select >> nth=0', 'ctx');
+
+	// החלפת שיטה/רשימה בזמן שסינון הרמה פעיל: סט השורות חייב להגיע משאילתה חדשה.
+	await page.selectOption('.mchl2-controls select >> nth=0', 'clean');
+	await page.waitForTimeout(200);
+	let before = requests.filter((r) => r.path.endsWith('/v_missing')).length;
+	await page.selectOption('.mchl2-top select >> nth=0', 'list');
+	await page.waitForTimeout(200);
+	let latest = requests.filter((r) => r.path.endsWith('/v_missing'));
+	checks.push(['החלפת שיטה טוענת סינון חדש', latest.length > before && /verdict_list_a=eq\.clean/.test(latest.at(-1).query) && !/verdict_ctx_a/.test(latest.at(-1).query)]);
+	before = latest.length;
+	await page.selectOption('.mchl2-top select >> nth=1', 's');
+	await page.waitForTimeout(200);
+	latest = requests.filter((r) => r.path.endsWith('/v_missing'));
+	checks.push(['החלפת רשימות טוענת סינון חדש', latest.length > before && /verdict_list_s=eq\.clean/.test(latest.at(-1).query) && !/verdict_list_a/.test(latest.at(-1).query)]);
+	await page.selectOption('.mchl2-controls select >> nth=0', '');
+	await page.waitForTimeout(200);
+	before = requests.filter((r) => r.path.endsWith('/v_missing')).length;
+	await page.selectOption('.mchl2-top select >> nth=0', 'ctx');
+	await page.waitForTimeout(100);
+	checks.push(['ללא סינון רמה אין שליפה מיותרת', requests.filter((r) => r.path.endsWith('/v_missing')).length === before]);
 
 	// טאב סטטיסטיקה
 	await page.click('text=סטטיסטיקה');
