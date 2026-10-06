@@ -28,6 +28,11 @@ jobs:
         run: |
           node dashboard/build.js
           git diff --exit-code dashboard/dist/gadget-dashboard.js
+      - name: בדיקות דפדפן מול מקורות מדומים בלבד
+        run: |
+          npm ci --prefix dashboard
+          dashboard/node_modules/.bin/playwright install --with-deps chromium
+          REQUIRE_BROWSER=1 node dashboard/tests/browser.test.js
 
   sql:
     runs-on: ubuntu-latest
@@ -42,7 +47,13 @@ jobs:
         run: |
           sudo -u postgres createuser --superuser "$USER" || true
           PGUSER="$USER" PGHOST=/var/run/postgresql db/run_tests.sh
-      - name: db/schema.sql מעודכן (נוצר מהמיגרציות)
-        run: |
-          PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
-          git diff --exit-code db/schema.sql
+      - name: יצירת db/schema.sql מהמיגרציות
+        id: generate_schema
+        run: PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
+      - name: db/schema.sql מעודכן
+        run: git diff --exit-code db/schema.sql
+      - uses: actions/upload-artifact@v5
+        if: ${{ always() && steps.generate_schema.outcome == 'success' }}
+        with:
+          name: generated-schema
+          path: db/schema.sql

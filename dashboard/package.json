@@ -1,0 +1,11 @@
+{
+  "name": "database-v2-dashboard-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/unit.test.js",
+    "test:browser": "node tests/browser.test.js"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -8,6 +8,7 @@
 import re
 
 from .normalize import semantic_candidate, title_key
+from .mw import query_field
 from .state import chunks
 
 TASK_REDIRECT, TASK_BAD_REV, TASK_DELETED = "redirect", "bad_rev", "deleted_by_rev"
@@ -34,12 +35,29 @@ def names_match(mech_title, wiki_title):
 
 def resolve_revisions(wiki_mw, rev_ids):
     """{rev_id: {page_id, title, ns, redirect} | None (לא קיימת)} לבקשה אחת (עד 50)."""
-    result = {r: None for r in rev_ids}
+    result = {}
     data = wiki_mw.get({"action": "query", "revids": "|".join(map(str, rev_ids)), "prop": "revisions|info", "rvprop": "ids"})
-    for page in data.get("query", {}).get("pages", []):
-        info = {"page_id": page.get("pageid"), "title": page.get("title"), "ns": page.get("ns"), "redirect": bool(page.get("redirect"))}
+    query = data.get("query")
+    if not isinstance(query, dict):
+        raise RuntimeError("תשובת גרסאות חסרה")
+    bad = query.get("badrevids", {})
+    if not isinstance(bad, dict):
+        raise RuntimeError("תשובת badrevids לא תקינה")
+    for key in bad:
+        rev = int(key)
+        if rev not in rev_ids:
+            raise RuntimeError("מזהה גרסה שלא נשאל")
+        result[rev] = None
+    for page in query.get("pages", []):
+        if not all(k in page for k in ("pageid", "title", "ns")) or page.get("missing"):
+            raise RuntimeError("דף גרסה לא תקין")
+        info = {"page_id": page["pageid"], "title": page["title"], "ns": page["ns"], "redirect": bool(page.get("redirect"))}
         for revision in page.get("revisions") or []:
+            if revision["revid"] not in rev_ids or revision["revid"] in result:
+                raise RuntimeError("מזהה גרסה לא צפוי או כפול")
             result[revision["revid"]] = info
+    if set(result) != set(rev_ids):
+        raise RuntimeError(f"תשובת גרסאות חלקית: {sorted(set(rev_ids) - set(result))[:5]}")
     return result
 
 
@@ -47,17 +65,32 @@ def resolve_redirect_targets(wiki_mw, titles):
     """{כותרת הפניה: כותרת היעד | None}. redirects=1 מפענח גם שרשראות."""
     result = {t: None for t in set(titles)}
     for part in chunks(sorted(result), BATCH):
-        query = wiki_mw.get({"action": "query", "titles": "|".join(part), "redirects": 1}).get("query", {})
+        data = wiki_mw.get({"action": "query", "titles": "|".join(part), "redirects": 1})
+        pages = {p["title"]: p for p in query_field(data, "pages")}
+        query = data["query"]
         normalized = {n["from"]: n["to"] for n in query.get("normalized", [])}
         redirects = {r["from"]: r["to"] for r in query.get("redirects", [])}
         for title in part:
-            result[title] = redirects.get(normalized.get(title, title))
+            start = current = normalized.get(title, title)
+            seen = set()
+            while current in redirects:
+                if current in seen:
+                    raise RuntimeError("לולאת הפניות בתשובת API")
+                seen.add(current)
+                current = redirects[current]
+            if current not in pages:
+                raise RuntimeError(f"תשובת הפניה חסרה עבור {title!r}")
+            result[title] = current if current != start and not pages[current].get("missing") else None
     return result
 
 
 def fetch_max_rev(wiki_mw):
-    data = wiki_mw.get({"action": "query", "list": "recentchanges", "rclimit": 1, "rcprop": "ids"})
-    return max((c["revid"] for c in data.get("query", {}).get("recentchanges") or []), default=0)
+    data = wiki_mw.get({"action": "query", "list": "recentchanges", "rctype": "edit|new", "rclimit": 1, "rcprop": "ids"})
+    rows = query_field(data, "recentchanges")
+    maximum = max((c["revid"] for c in rows), default=0)
+    if maximum <= 1:
+        raise RuntimeError("לא התקבל מספר גרסה אחרונה תקין")
+    return maximum
 
 
 def decide(row, resolved, max_rev, redirect_target):

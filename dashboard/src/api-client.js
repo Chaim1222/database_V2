@@ -1,14 +1,18 @@
 // לקוח PostgREST ל-v2: קריאות לסכמת api, התחברות Supabase Auth ורענון טוקן. fetch והאחסון מוזרקים (נבדק ב-tests/).
 function createClient(opts) {
 	var fetchFn = opts.fetch;
-	var storage = opts.storage || { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} };
+	var storage = opts.storage;
+	var memorySession;
+	var refreshing = null;
 	var cfg = opts.config;
 
 	function readSession() {
-		try { return JSON.parse(storage.getItem(cfg.sessionKey) || 'null'); } catch (e) { return null; }
+		if (memorySession !== undefined) return memorySession;
+		try { return storage ? JSON.parse(storage.getItem(cfg.sessionKey) || 'null') : null; } catch (e) { return null; }
 	}
 	function writeSession(s) {
-		try { if (s) storage.setItem(cfg.sessionKey, JSON.stringify(s)); else storage.removeItem(cfg.sessionKey); } catch (e) { /* בלי אחסון: ההתחברות תחזיק עד סגירת הדף */ }
+		memorySession = s;
+		try { if (storage) { if (s) storage.setItem(cfg.sessionKey, JSON.stringify(s)); else storage.removeItem(cfg.sessionKey); } } catch (e) { /* נשמר בזיכרון עד סגירת הדף */ }
 	}
 	function headers(extra, authed) {
 		var s = authed ? readSession() : null;
@@ -33,12 +37,13 @@ function createClient(opts) {
 		if (o.order) params.set('order', o.order);
 		var extra = { Range: (o.from || 0) + '-' + (o.to === undefined ? (o.from || 0) + cfg.pageSize - 1 : o.to), 'Range-Unit': 'items' };
 		if (o.count !== false) extra.Prefer = 'count=exact';
-		var attempt = function (n) {
+		var attempt = function (n, renewed) {
 			return fetchFn(cfg.url + '/rest/v1/' + view + '?' + params.toString(), { headers: headers(extra, o.authed) }).then(function (res) {
+				if (o.authed && res.status === 401 && !renewed) return refresh().then(function () { return attempt(n, true); });
 				if ((res.status >= 500 || res.status === 429) && n < 1) {
 					return res.text().then(function (t) {
 						if (/57014/.test(t)) throw fail(res, t);
-						return wait(1500).then(function () { return attempt(n + 1); });
+						return wait(1500).then(function () { return attempt(n + 1, renewed); });
 					});
 				}
 				if (!res.ok) return res.text().then(function (t) { throw fail(res, t); });
@@ -75,9 +80,11 @@ function createClient(opts) {
 	}
 	function login(email, password) { return authCall('password', { email: email, password: password }); }
 	function refresh() {
+		if (refreshing) return refreshing;
 		var s = readSession();
 		if (!s || !s.refresh_token) return Promise.reject(new Error('פג תוקף ההתחברות, יש להתחבר מחדש'));
-		return authCall('refresh_token', { refresh_token: s.refresh_token });
+		refreshing = authCall('refresh_token', { refresh_token: s.refresh_token });
+		return refreshing.then(function (d) { refreshing = null; return d; }, function (e) { refreshing = null; throw e; });
 	}
 	function logout() { writeSession(null); }
 	function isLoggedIn() { var s = readSession(); return !!(s && s.access_token); }

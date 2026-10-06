@@ -13,7 +13,10 @@ for f in [0-9]*.sql; do
   grep -qx "$v" <<<"$applied" || pending+=("$f")
 done
 orphans=$(comm -13 <(printf '%s\n' "${in_repo[@]}" | sort) <(sort <<<"$applied") | grep -v '^$' || true)
-[ -n "$orphans" ] && echo "סטייה: במסד מיגרציות שאינן בריפו: $orphans"
+if [ -n "$orphans" ]; then
+  echo "סטייה: במסד מיגרציות שאינן בריפו: $orphans"
+  exit 1   # אין להחיל על בסיס שונה בלי ליישב את ההיסטוריה תחילה.
+fi
 echo "ממתינות: ${#pending[@]} ${pending[*]:-}"
 if [ "${1:-}" = "--check" ]; then
   [ "${#pending[@]}" = 0 ] && [ -z "$orphans" ]; exit

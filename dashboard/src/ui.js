@@ -374,13 +374,23 @@ function createApp(root, client, env) {
 		return client.rpc('is_admin', {}).then(function (ok) { state.admin = ok === true; render(); }).catch(function () { state.admin = false; render(); });
 	}
 
+	function changeScanOption(key, value) {
+		var hadLevel = !!state.filters.level;
+		state[key] = value;
+		// לרשימה אין דרגות חשד high/medium/low. בחירה שכבר אינה תקפה חוזרת ל"הכול" בגלוי.
+		if (key === 'method' && value === 'list' && ['high', 'medium', 'low'].indexOf(state.filters.level) !== -1) state.filters.level = '';
+		// בלי סינון רמה כל ארבע התוצאות כבר בשורה. עם סינון, תנאי השאילתה השתנה ויש לטעון שוב.
+		if (!tab().special && hadLevel) { state.page = 0; load(); }
+		else render();
+	}
+
 	function render() {
 		var t = tab();
 		var top = h('div', { 'class': 'mchl2-top' }, [
 			h('div', { 'class': 'mchl2-brand' }, [h('span', { 'class': 'mchl2-logo', text: '⇄' }), h('span', { text: 'ניהול ייבוא' })]),
-			h('label', {}, ['שיטה', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.method = e.target.value; render(); } },
+			h('label', {}, ['שיטה', h('select', { 'class': 'mchl2-input', onchange: function (e) { changeScanOption('method', e.target.value); } },
 				[['list', 'לפי רשימה'], ['ctx', 'לפי הקשר']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.method === o[0] ? 'selected' : null }); }))]),
-			h('label', {}, ['רשימות', h('select', { 'class': 'mchl2-input', onchange: function (e) { state.mode = e.target.value; render(); } },
+			h('label', {}, ['רשימות', h('select', { 'class': 'mchl2-input', onchange: function (e) { changeScanOption('mode', e.target.value); } },
 				[['a', 'מאושרות'], ['s', 'כולל הצעות']].map(function (o) { return h('option', { value: o[0], text: o[1], selected: state.mode === o[0] ? 'selected' : null }); }))]),
 			authBox()
 		]);

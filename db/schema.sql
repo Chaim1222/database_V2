@@ -749,6 +749,7 @@ declare
     v_updated integer;
     v_ids bigint[];
     v_gap integer;
+    v_removed bigint[] := '{}';
 begin
     if exists (select 1 from jsonb_to_recordset(p_live) as l(page_id bigint) group by page_id having count(*) > 1)
        or exists (select 1 from jsonb_to_recordset(p_live) as l(title text) group by title having count(*) > 1) then
@@ -758,14 +759,24 @@ begin
     select coalesce(array_agg(page_id), '{}') into v_ids from jsonb_to_recordset(p_live) as l(page_id bigint);
 
     -- מזהים שנעלמו (אלא אם הם גם חיים בקלט: אז המצב החי גובר)
-    delete from mirror.wiki_page w
-    where w.page_id = any (p_gone_ids) and not (w.page_id = any (v_ids));
-    get diagnostics v_rows = row_count; v_deleted := v_deleted + v_rows;
+    with gone as (
+        delete from mirror.wiki_page w
+        where w.page_id = any (p_gone_ids) and not (w.page_id = any (v_ids))
+        returning w.page_id
+    )
+    select v_removed || coalesce(array_agg(page_id), '{}'), count(*)
+    into v_removed, v_rows from gone;
+    v_deleted := v_deleted + v_rows;
 
     -- כותרות שנעלמו: רק שורה שהמזהה שלה אינו חי
-    delete from mirror.wiki_page w
-    where w.title = any (p_gone_titles) and not (w.page_id = any (v_ids));
-    get diagnostics v_rows = row_count; v_deleted := v_deleted + v_rows;
+    with gone as (
+        delete from mirror.wiki_page w
+        where w.title = any (p_gone_titles) and not (w.page_id = any (v_ids))
+        returning w.page_id
+    )
+    select v_removed || coalesce(array_agg(page_id), '{}'), count(*)
+    into v_removed, v_rows from gone;
+    v_deleted := v_deleted + v_rows;
 
     -- פינוי כותרות: דף חי שהכותרת שלו השתנתה עובר לכותרת זמנית ייחודית, כך שהחלפות והעברות שרשרת לא מתנגשות
     update mirror.wiki_page w set title = '#tmp-' || w.page_id
@@ -773,10 +784,15 @@ begin
     where w.page_id = l.page_id and w.title <> l.title;
 
     -- שורה מיושנת (מזהה שאינו בקלט) שמחזיקה כותרת של דף חי: נמחקת
-    delete from mirror.wiki_page w
-    using jsonb_to_recordset(p_live) as l(page_id bigint, title text)
-    where w.title = l.title and w.page_id <> l.page_id and not (w.page_id = any (v_ids));
-    get diagnostics v_rows = row_count; v_deleted := v_deleted + v_rows;
+    with gone as (
+        delete from mirror.wiki_page w
+        using jsonb_to_recordset(p_live) as l(page_id bigint, title text)
+        where w.title = l.title and w.page_id <> l.page_id and not (w.page_id = any (v_ids))
+        returning w.page_id
+    )
+    select v_removed || coalesce(array_agg(page_id), '{}'), count(*)
+    into v_removed, v_rows from gone;
+    v_deleted := v_deleted + v_rows;
 
     with up as (
         insert into mirror.wiki_page as w (page_id, title, latest_rev_id)
@@ -791,7 +807,7 @@ begin
     )
     select count(*) filter (where inserted), count(*) filter (where not inserted) into v_inserted, v_updated from up;
 
-    v_gap := derived.refresh_wiki_gap(v_ids || p_gone_ids);
+    v_gap := derived.refresh_wiki_gap(v_ids || p_gone_ids || v_removed);
     return jsonb_build_object('live', cardinality(v_ids), 'inserted', v_inserted, 'updated', v_updated,
                               'deleted', v_deleted, 'gap_changed', v_gap);
 end;
@@ -1503,6 +1519,17 @@ CREATE VIEW api.report_undocumented_import WITH (security_invoker='true') AS
    FROM api.v_undocumented u;
 
 --
+-- Name: template_link; Type: TABLE; Schema: derived; Owner: -
+--
+
+CREATE TABLE derived.template_link (
+    mech_id bigint NOT NULL,
+    wiki_id bigint,
+    template_ref text,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: page_event; Type: TABLE; Schema: mirror; Owner: -
 --
 
@@ -1524,16 +1551,46 @@ CREATE TABLE mirror.page_event (
 --
 
 CREATE VIEW api.v_moves WITH (security_invoker='true') AS
- SELECT m.page_id AS id,
+ WITH last_move AS (
+         SELECT DISTINCT ON (ev.page_id, ev.title) ev.page_id,
+            ev.title,
+            ev.ts
+           FROM mirror.page_event ev
+          WHERE ((ev.site = 'wikipedia'::text) AND (ev.kind = 'move'::text))
+          ORDER BY ev.page_id, ev.title, ev.ts DESC, ev.id DESC
+        ), hits AS (
+         SELECT m_1.page_id AS mech_id,
+            lm.page_id AS wiki_id,
+            lm.title AS old_title,
+            lm.ts,
+            'title'::text AS via
+           FROM (last_move lm
+             JOIN mirror.mech_page m_1 ON ((mirror.title_key(m_1.title) = mirror.title_key(lm.title))))
+        UNION ALL
+         SELECT m_1.page_id,
+            lm.page_id,
+            lm.title,
+            lm.ts,
+            'template'::text AS text
+           FROM ((last_move lm
+             JOIN derived.template_link t ON (((mirror.title_key(t.template_ref) = mirror.title_key(lm.title)) AND (t.wiki_id IS NULL) AND (t.template_ref IS NOT NULL))))
+             JOIN mirror.mech_page m_1 ON ((m_1.page_id = t.mech_id)))
+          WHERE ((m_1.status <> 'kept_after_wiki_delete'::text) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.manual_link x
+                  WHERE (x.mech_id = m_1.page_id)))))
+        )
+ SELECT DISTINCT ON (h.mech_id) h.mech_id AS id,
     m.title,
-    ev.title AS old_title,
-    ev.new_title AS wikipedia_title,
-    ev.ts AS moved_at
-   FROM (mirror.page_event ev
-     JOIN mirror.mech_page m ON ((mirror.title_key(m.title) = mirror.title_key(ev.title))))
-  WHERE ((ev.site = 'wikipedia'::text) AND (ev.kind = 'move'::text) AND (NOT (EXISTS ( SELECT 1
-           FROM mirror.wiki_page w
-          WHERE (mirror.title_key(w.title) = mirror.title_key(m.title))))));
+    h.old_title,
+    w.title AS wikipedia_title,
+    h.ts AS moved_at,
+    h.via,
+    h.wiki_id
+   FROM ((hits h
+     JOIN mirror.mech_page m ON ((m.page_id = h.mech_id)))
+     JOIN mirror.wiki_page w ON ((w.page_id = h.wiki_id)))
+  WHERE (mirror.title_key(m.title) <> mirror.title_key(w.title))
+  ORDER BY h.mech_id, (h.via = 'title'::text) DESC, h.ts DESC, h.wiki_id, h.old_title;
 
 --
 -- Name: report_wikipedia_moves; Type: VIEW; Schema: api; Owner: -
@@ -1545,8 +1602,9 @@ CREATE VIEW api.report_wikipedia_moves WITH (security_invoker='true') AS
     v.old_title,
     v.wikipedia_title,
     v.moved_at AS renamed_at,
-    'title'::text AS via,
-    ms.label_he AS status
+    v.via,
+    ms.label_he AS status,
+    v.wiki_id AS wikipedia_id
    FROM ((api.v_moves v
      JOIN mirror.mech_page m ON ((m.page_id = v.id)))
      JOIN ref.mech_status ms ON ((ms.code = m.status)));
@@ -1702,17 +1760,6 @@ CREATE TABLE derived.template_check (
     template_rev bigint,
     template_title text,
     CONSTRAINT template_check_outcome_check CHECK ((outcome = ANY (ARRAY['none'::text, 'same'::text, 'ok'::text, 'unresolved'::text, 'denied'::text])))
-);
-
---
--- Name: template_link; Type: TABLE; Schema: derived; Owner: -
---
-
-CREATE TABLE derived.template_link (
-    mech_id bigint NOT NULL,
-    wiki_id bigint,
-    template_ref text,
-    verified_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 --
@@ -2190,6 +2237,12 @@ CREATE INDEX rev_check_task_idx ON derived.rev_check USING btree (rev_task, mech
 --
 
 CREATE INDEX template_check_outcome_idx ON derived.template_check USING btree (outcome) WHERE (outcome = ANY (ARRAY['unresolved'::text, 'denied'::text]));
+
+--
+-- Name: template_link_unresolved_title_idx; Type: INDEX; Schema: derived; Owner: -
+--
+
+CREATE INDEX template_link_unresolved_title_idx ON derived.template_link USING btree (mirror.title_key(template_ref)) WHERE ((wiki_id IS NULL) AND (template_ref IS NOT NULL));
 
 --
 -- Name: template_link_wiki_idx; Type: INDEX; Schema: derived; Owner: -
@@ -3092,6 +3145,14 @@ GRANT SELECT ON TABLE api.report_undocumented_import TO anon;
 GRANT SELECT ON TABLE api.report_undocumented_import TO authenticated;
 
 --
+-- Name: TABLE template_link; Type: ACL; Schema: derived; Owner: -
+--
+
+GRANT ALL ON TABLE derived.template_link TO service_role;
+GRANT SELECT ON TABLE derived.template_link TO anon;
+GRANT SELECT ON TABLE derived.template_link TO authenticated;
+
+--
 -- Name: TABLE page_event; Type: ACL; Schema: mirror; Owner: -
 --
 
@@ -3194,14 +3255,6 @@ GRANT SELECT ON TABLE api.v_sync_status TO authenticated;
 GRANT ALL ON TABLE derived.template_check TO service_role;
 GRANT SELECT ON TABLE derived.template_check TO anon;
 GRANT SELECT ON TABLE derived.template_check TO authenticated;
-
---
--- Name: TABLE template_link; Type: ACL; Schema: derived; Owner: -
---
-
-GRANT ALL ON TABLE derived.template_link TO service_role;
-GRANT SELECT ON TABLE derived.template_link TO anon;
-GRANT SELECT ON TABLE derived.template_link TO authenticated;
 
 --
 -- Name: TABLE v_template_issues; Type: ACL; Schema: api; Owner: -
