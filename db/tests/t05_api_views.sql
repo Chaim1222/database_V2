@@ -16,7 +16,7 @@ insert into work.manual_link (mech_id, wiki_id) values (22, 3);
 insert into work.page_lock (site, page_id, level, detected_by) values ('mechalol', 21, 'read', 'access_denied');
 insert into work.exclusion (kind, title, reason) values ('locked_create', 'נעול ליצירה', 'x');
 insert into mirror.page_event (site, kind, page_id, title, new_title, ts)
-    values ('wikipedia', 'move', 0, 'הועבר', 'הועבר (ויקיפדיה)', '2026-10-05 11:00:00+00');
+    values ('wikipedia', 'move', 5, 'הועבר', 'בית האזרח (רמת גן)', '2026-10-05 11:00:00+00');
 insert into derived.rev_check (mech_id, rev_task, linked_wiki_id) values (20, 'bad_rev', 3), (22, 'redirect', null);
 insert into ops.sync_run (kind, status, started_at) values ('sync', 'failed', '2026-10-05 08:00:00+00'), ('sync', 'succeeded', '2026-10-05 09:00:00+00');
 select derived.refresh_wiki_gap();
