@@ -1433,6 +1433,20 @@ CREATE TABLE derived.rev_check (
 );
 
 --
+-- Name: template_check; Type: TABLE; Schema: derived; Owner: -
+--
+
+CREATE TABLE derived.template_check (
+    mech_id bigint NOT NULL,
+    outcome text NOT NULL,
+    rev_id bigint,
+    checked_at timestamp with time zone DEFAULT now() NOT NULL,
+    template_rev bigint,
+    template_title text,
+    CONSTRAINT template_check_outcome_check CHECK ((outcome = ANY (ARRAY['none'::text, 'same'::text, 'ok'::text, 'unresolved'::text, 'denied'::text])))
+);
+
+--
 -- Name: v_rev_tasks; Type: VIEW; Schema: api; Owner: -
 --
 
@@ -1447,13 +1461,14 @@ CREATE VIEW api.v_rev_tasks WITH (security_invoker='true') AS
     c.rev_page_id,
     c.rev_page_title,
     c.checked_at
-   FROM (((derived.rev_check c
+   FROM ((((derived.rev_check c
      JOIN mirror.mech_page m ON ((m.page_id = c.mech_id)))
      JOIN ref.mech_status ms ON ((ms.code = m.status)))
      LEFT JOIN mirror.wiki_page lw ON ((lw.page_id = c.linked_wiki_id)))
-  WHERE (NOT (EXISTS ( SELECT 1
+     LEFT JOIN derived.template_check t ON ((t.mech_id = c.mech_id)))
+  WHERE ((NOT (EXISTS ( SELECT 1
            FROM work.manual_link x
-          WHERE (x.mech_id = c.mech_id))));
+          WHERE (x.mech_id = c.mech_id)))) AND ((t.mech_id IS NULL) OR (t.outcome = 'denied'::text) OR (COALESCE(c.rev_id, (0)::bigint) = COALESCE(t.template_rev, (0)::bigint))));
 
 --
 -- Name: report_rev_tasks; Type: VIEW; Schema: api; Owner: -
@@ -1760,20 +1775,6 @@ CREATE VIEW api.v_sync_status WITH (security_invoker='true') AS
    FROM (ops.sync_run r
      LEFT JOIN ops.health() h(kind, state, last_success_at, running_since) ON ((h.kind = r.kind)))
   ORDER BY r.kind, r.started_at DESC;
-
---
--- Name: template_check; Type: TABLE; Schema: derived; Owner: -
---
-
-CREATE TABLE derived.template_check (
-    mech_id bigint NOT NULL,
-    outcome text NOT NULL,
-    rev_id bigint,
-    checked_at timestamp with time zone DEFAULT now() NOT NULL,
-    template_rev bigint,
-    template_title text,
-    CONSTRAINT template_check_outcome_check CHECK ((outcome = ANY (ARRAY['none'::text, 'same'::text, 'ok'::text, 'unresolved'::text, 'denied'::text])))
-);
 
 --
 -- Name: v_template_issues; Type: VIEW; Schema: api; Owner: -
@@ -3173,6 +3174,14 @@ GRANT SELECT ON TABLE derived.rev_check TO anon;
 GRANT SELECT ON TABLE derived.rev_check TO authenticated;
 
 --
+-- Name: TABLE template_check; Type: ACL; Schema: derived; Owner: -
+--
+
+GRANT ALL ON TABLE derived.template_check TO service_role;
+GRANT SELECT ON TABLE derived.template_check TO anon;
+GRANT SELECT ON TABLE derived.template_check TO authenticated;
+
+--
 -- Name: TABLE v_rev_tasks; Type: ACL; Schema: api; Owner: -
 --
 
@@ -3315,14 +3324,6 @@ GRANT SELECT ON TABLE ops.sync_run TO authenticated;
 GRANT ALL ON TABLE api.v_sync_status TO service_role;
 GRANT SELECT ON TABLE api.v_sync_status TO anon;
 GRANT SELECT ON TABLE api.v_sync_status TO authenticated;
-
---
--- Name: TABLE template_check; Type: ACL; Schema: derived; Owner: -
---
-
-GRANT ALL ON TABLE derived.template_check TO service_role;
-GRANT SELECT ON TABLE derived.template_check TO anon;
-GRANT SELECT ON TABLE derived.template_check TO authenticated;
 
 --
 -- Name: TABLE v_template_issues; Type: ACL; Schema: api; Owner: -
