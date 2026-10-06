@@ -144,12 +144,21 @@ def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, sess
             changes = compare_classification(src_fields, db_fields) if src_fields else {}
             ids, titles, counts = collect_window(mw.get, since, until)
             window = {"since": since, "until": until, "refs": len(ids) + len(titles), "counts": counts}
+            meta[site] = {"source": len(src_titles), "db": len(db_titles), "window": window}
+            if fix and site == "mechalol":
+                meta[site]["before_fix"] = summarize_site(site, len(src_titles), len(db_titles), diff, changes, ids, titles,
+                                                         source_titles=src_titles, window=window)
+                fixed = fix_classification(rpc, src_titles, src_fields, changes, ids, titles, len(db_titles), log)
+                meta[site]["fixed_classification"] = fixed
+                if fixed:
+                    # Verify persistence against the same snapshot and closed window.
+                    db_titles, db_fields = read_db(rpc, site, log=log)
+                    diff = compare_titles(src_titles, db_titles)
+                    changes = compare_classification(src_fields, db_fields)
+                    meta[site]["db"] = len(db_titles)
             sites.append(summarize_site(site, len(src_titles), len(db_titles), diff, changes, ids, titles,
                                         source_titles=src_titles, window=window))
-            meta[site] = {"source": len(src_titles), "db": len(db_titles), "window": window}
             findings += _findings(site, diff, changes, ids, titles)
-            if fix and site == "mechalol":
-                meta[site]["fixed_classification"] = fix_classification(rpc, src_titles, src_fields, changes, ids, titles, len(db_titles), log)
             v1_titles = read_v1_titles(env, site, session=session)
             if v1_titles is not None:
                 shared = v1_vs_v2(site, src_titles, db_titles, v1_titles)
@@ -164,11 +173,13 @@ def run_reconcile(mws, rpc, log=print, skip_mechalol=False, env=os.environ, sess
     except Exception as exc:
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": {}, "p_error": str(exc)[:1000]})
         raise
-    report = {"run_id": run_key, "snapshot": {k: v for k, v in meta.items() if k == "watermarks"}, "sites": sites}
+    ok = all(s["unexplained_pages"] == 0 for s in sites)
+    report = {"ok": ok, "run_id": run_key, "snapshot": {k: v for k, v in meta.items() if k == "watermarks"}, "sites": sites}
     rpc.call("reconcile_record", {"p_snapshot_meta": meta, "p_summary": {s["site"]: {"classes": s["classes"], "unexplained_pages": s["unexplained_pages"],
                                                                                     "delete_rate": s["delete_rate"]} for s in sites},
                                   "p_findings": findings})
-    rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded", "p_stats": {s["site"]: s["unexplained_pages"] for s in sites}})
+    rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded" if ok else "failed", "p_stats": {s["site"]: s["unexplained_pages"] for s in sites},
+                                  "p_error": None if ok else "פערים שלא הוסברו נותרו לאחר ההשוואה והתיקון הזמין"})
     markdown = render_markdown(report)
     print(markdown)
     path = os.environ.get("GITHUB_STEP_SUMMARY")

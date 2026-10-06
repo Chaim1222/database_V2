@@ -16,7 +16,7 @@ BATCH = 50
 GROUPS = ("redirect", "locks", "length", "desc", "created")
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 
-SKIP_BUDGET = {"left": 20}   # כמה כותרות בודדות מותר לדלג עליהן (403) בריצת העשרה אחת; יותר מזה = חסימה כללית, והריצה נכשלת
+SKIP_BUDGET = {"left": 20}   # כמה כותרות בודדות מותר לדלג עליהן (כשל שליפה או שינוי במקור) בקבוצת העשרה אחת; יותר מזה = חסימה כללית, והריצה נכשלת
 
 
 def query_titles(mw, titles, extra, log=print):
@@ -41,15 +41,47 @@ def query_titles(mw, titles, extra, log=print):
         return a[0] + b[0], a[1] + b[1], a[2] + b[2]
 
 
+def _skip_changed(title, reason, log=print):
+    """A confirmed source race consumes the same budget as isolated fetch failures."""
+    SKIP_BUDGET["left"] -= 1
+    if SKIP_BUDGET["left"] < 0:
+        raise RuntimeError("יותר מדי דפים השתנו או נכשלו בשליפה; נדרש סנכרון ובדיקה חוזרת")
+    log(f"העשרה: מדלג על {title!r}: {reason}; נשאר ממתין לבדיקה חוזרת")
+
+
+def _pages(data):
+    query = data.get("query") if isinstance(data, dict) else None
+    pages = query.get("pages") if isinstance(query, dict) else None
+    if not isinstance(pages, list) or not all(isinstance(p, dict) for p in pages):
+        raise RuntimeError("תשובת העשרה ללא רשימת דפים תקינה")
+    return pages
+
+
 def fetch_length(wiki_mw, pages):
-    """pages: [{wiki_id, title}] -> שורות {wiki_id, length}. דף שלא חזר (נמחק בינתיים) לא נשלח."""
+    """Keep identity: confirmed missing/replaced titles are skipped, malformed replies fail."""
     by_title = {p["title"]: p["wiki_id"] for p in pages}
     data = wiki_mw.get({"action": "query", "prop": "info", "titles": "|".join(by_title)})
-    rows = []
-    for page in data["query"]["pages"]:
-        wiki_id = by_title.get(page.get("title"))
-        if wiki_id and not page.get("missing") and "length" in page:
-            rows.append({"wiki_id": wiki_id, "length": page["length"]})
+    normalized = {n["to"]: n["from"] for n in data.get("query", {}).get("normalized", [])}
+    rows, seen = [], set()
+    for page in _pages(data):
+        title = normalized.get(page.get("title"), page.get("title"))
+        if title not in by_title or title in seen:
+            raise RuntimeError("תשובת אורך עם כותרת לא צפויה או כפולה")
+        seen.add(title)
+        if "missing" in page:
+            _skip_changed(title, "הדף חסר במקור")
+            continue
+        wiki_id = by_title[title]
+        if type(page.get("pageid")) is not int or page["pageid"] <= 0:
+            raise RuntimeError("תשובת אורך ללא מזהה דף תקין")
+        if page["pageid"] != wiki_id:
+            _skip_changed(title, "הכותרת שייכת כעת למזהה אחר")
+            continue
+        if type(page.get("length")) is not int or page["length"] < 0:
+            raise RuntimeError("תשובת אורך ללא אורך תקין")
+        rows.append({"wiki_id": wiki_id, "length": page["length"]})
+    if seen != set(by_title):
+        raise RuntimeError("תשובת אורך חלקית")
     return rows
 
 
@@ -89,7 +121,7 @@ CREATED_PACE = 0.05
 
 
 def fetch_created(wiki_mw, pages):
-    """{wiki_id, created_at}: חותמת הגרסה הראשונה, או None כשאין (נשמר כנבדק). כשל API מפיל את הריצה."""
+    """{wiki_id, created_at}: חותמת הגרסה הראשונה, שינוי זהות או מחיקה מדולגים בתקציב הכשלים; תשובה פגומה מכשילה."""
     rows = []
     for p in pages:
         time.sleep(CREATED_PACE)   # בקשה לכל כותרת (25 אלף ויותר): הקצב מונע 429 מוויקיפדיה
@@ -102,9 +134,23 @@ def fetch_created(wiki_mw, pages):
                 raise RuntimeError("יותר מדי כותרות נכשלו בשליפת תאריך יצירה: כנראה הגבלה או חסימה כללית") from exc
             print(f"תאריך יצירה: כשל על {p['title']!r} ({exc}), מדלג")
             continue
-        page = (data["query"]["pages"] or [{}])[0]
-        revisions = page.get("revisions") or []
-        rows.append({"wiki_id": p["wiki_id"], "created_at": revisions[0]["timestamp"] if revisions and not page.get("missing") else None})
+        returned = _pages(data)
+        if len(returned) != 1:
+            raise RuntimeError("תשובת תאריך יצירה חסרה או כפולה")
+        page = returned[0]
+        if "missing" in page:
+            _skip_changed(p["title"], "הדף חסר במקור")
+            continue
+        if type(page.get("pageid")) is not int or page["pageid"] <= 0:
+            raise RuntimeError("תשובת תאריך יצירה ללא מזהה דף תקין")
+        if page["pageid"] != p["wiki_id"]:
+            _skip_changed(p["title"], "הכותרת שייכת כעת למזהה אחר")
+            continue
+        revisions = page.get("revisions")
+        if (not isinstance(revisions, list) or not revisions or not isinstance(revisions[0], dict)
+                or not isinstance(revisions[0].get("timestamp"), str) or not revisions[0]["timestamp"]):
+            raise RuntimeError("תאריך יצירה חסר לדף חי")
+        rows.append({"wiki_id": p["wiki_id"], "created_at": revisions[0]["timestamp"]})
     return rows
 
 

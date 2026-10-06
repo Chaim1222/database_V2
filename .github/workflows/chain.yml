@@ -1,6 +1,7 @@
 name: "2 עד 5: הכול ברצף"
 # מפעיל ברצף, אחד אחרי השני: 2. בדיקת תבניות מיון, 3. השלמת פרטים, 4. בדיקת גרסאות, 5. השוואה מלאה מול האתרים.
 # כל שלב רץ רק אם כל השלבים שלפניו הצליחו; כשל עוצר את השרשרת. "להתחיל מ" מאפשר לדלג על שלבים שכבר רצו (למשל להתחיל מ-3).
+# שלב ההשוואה בשרשרת מפעיל את תיקון הסיווג הקיים (שער 2%) לפני בדיקת הפערים שנותרו.
 # כל שלב נשאר גם workflow נפרד שאפשר להפעיל לבד. אין כאן concurrency משלו: לכל שלב יש קבוצת concurrency משלו (כתיבה למסד אחת בכל פעם).
 on:
   workflow_dispatch:
@@ -33,4 +34,6 @@ jobs:
     needs: [templates, enrich, revcheck]
     if: ${{ !cancelled() && needs.templates.result != 'failure' && needs.templates.result != 'cancelled' && needs.enrich.result != 'failure' && needs.enrich.result != 'cancelled' && needs.revcheck.result != 'failure' && needs.revcheck.result != 'cancelled' }}
     uses: ./.github/workflows/reconcile.yml
+    with:
+      fix: true
     secrets: inherit
