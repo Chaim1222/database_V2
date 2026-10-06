@@ -1,0 +1,28 @@
+name: "בדיקת ספירות 0031 במסד זמני בלבד"
+on:
+  pull_request:
+    paths:
+      - "ops/benchmark_migration31.py"
+      - ".github/workflows/benchmark-migration31.yml"
+permissions:
+  contents: read
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: PostgreSQL מקומי זמני
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql postgresql-contrib
+          sudo systemctl start postgresql
+          sudo -u postgres createuser --superuser "$USER" || true
+      - name: השוואת 0030 מול 0031 ללא סודות וללא חיבור לייצור
+        run: PGUSER="$USER" python3 ops/benchmark_migration31.py
+        env:
+          PGHOST: /var/run/postgresql
+      - uses: actions/upload-artifact@v5
+        with:
+          name: migration31-comparison
+          path: benchmark-results.*

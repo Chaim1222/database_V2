@@ -1,0 +1,231 @@
+{
+  "environment": {
+    "postgres": "16.15 (Ubuntu 16.15-1.pgdg24.04+2)",
+    "wiki_rows": 400000,
+    "mech_rows": 380000,
+    "batch": 500,
+    "repeats": 3,
+    "synthetic": true,
+    "warmed_samples": true
+  },
+  "results": {
+    "0030": {
+      "insert_500": {
+        "ms": [
+          7.466,
+          7.213,
+          7.206
+        ],
+        "median_ms": 7.213,
+        "max_ms": 7.466
+      },
+      "unchanged_upsert_500": {
+        "ms": [
+          1.815,
+          1.761,
+          1.824
+        ],
+        "median_ms": 1.815,
+        "max_ms": 1.824
+      },
+      "delete_500": {
+        "ms": [
+          0.98,
+          0.902,
+          0.918
+        ],
+        "median_ms": 0.918,
+        "max_ms": 0.98
+      },
+      "sync_insert_500": {
+        "ms": [
+          29.06,
+          28.895,
+          30.747
+        ],
+        "median_ms": 29.06,
+        "max_ms": 30.747
+      },
+      "sync_replay_500": {
+        "ms": [
+          19.589,
+          19.736,
+          18.994
+        ],
+        "median_ms": 19.589,
+        "max_ms": 19.736
+      },
+      "sync_delete_500": {
+        "ms": [
+          6.676,
+          6.57,
+          6.456
+        ],
+        "median_ms": 6.57,
+        "max_ms": 6.676
+      },
+      "refresh_counts": {
+        "ms": [
+          78.879,
+          69.894,
+          67.615
+        ],
+        "median_ms": 69.894,
+        "max_ms": 78.879
+      },
+      "read_5000": {
+        "ms": [
+          2.928,
+          3.012,
+          3.097
+        ],
+        "median_ms": 3.012,
+        "max_ms": 3.097
+      },
+      "parallel_writes": [
+        {
+          "writer_ms": [
+            109.502,
+            114.947,
+            114.36,
+            113.944
+          ],
+          "max_observed_lock_waiters": 0,
+          "lock_samples": 4,
+          "intentional_hold_ms": 100
+        },
+        {
+          "writer_ms": [
+            116.804,
+            115.941,
+            108.936,
+            114.537
+          ],
+          "max_observed_lock_waiters": 0,
+          "lock_samples": 4,
+          "intentional_hold_ms": 100
+        },
+        {
+          "writer_ms": [
+            110.9,
+            112.906,
+            111.556,
+            116.228
+          ],
+          "max_observed_lock_waiters": 0,
+          "lock_samples": 4,
+          "intentional_hold_ms": 100
+        }
+      ]
+    },
+    "0031": {
+      "insert_500": {
+        "ms": [
+          8.085,
+          8.18,
+          8.154
+        ],
+        "median_ms": 8.154,
+        "max_ms": 8.18
+      },
+      "unchanged_upsert_500": {
+        "ms": [
+          2.51,
+          2.654,
+          2.494
+        ],
+        "median_ms": 2.51,
+        "max_ms": 2.654
+      },
+      "delete_500": {
+        "ms": [
+          1.813,
+          1.81,
+          1.842
+        ],
+        "median_ms": 1.813,
+        "max_ms": 1.842
+      },
+      "sync_insert_500": {
+        "ms": [
+          30.71,
+          30.285,
+          30.478
+        ],
+        "median_ms": 30.478,
+        "max_ms": 30.71
+      },
+      "sync_replay_500": {
+        "ms": [
+          20.321,
+          19.887,
+          19.828
+        ],
+        "median_ms": 19.887,
+        "max_ms": 20.321
+      },
+      "sync_delete_500": {
+        "ms": [
+          7.476,
+          7.867,
+          7.763
+        ],
+        "median_ms": 7.763,
+        "max_ms": 7.867
+      },
+      "refresh_counts": {
+        "ms": [
+          64.54,
+          64.575,
+          65.119
+        ],
+        "median_ms": 64.575,
+        "max_ms": 65.119
+      },
+      "read_5000": {
+        "ms": [
+          2.989,
+          2.939,
+          2.963
+        ],
+        "median_ms": 2.963,
+        "max_ms": 2.989
+      },
+      "parallel_writes": [
+        {
+          "writer_ms": [
+            218.296,
+            116.756,
+            397.782,
+            295.911
+          ],
+          "max_observed_lock_waiters": 3,
+          "lock_samples": 9,
+          "intentional_hold_ms": 100
+        },
+        {
+          "writer_ms": [
+            216.839,
+            314.47,
+            115.948,
+            394.312
+          ],
+          "max_observed_lock_waiters": 3,
+          "lock_samples": 9,
+          "intentional_hold_ms": 100
+        },
+        {
+          "writer_ms": [
+            117.491,
+            216.384,
+            394.796,
+            300.491
+          ],
+          "max_observed_lock_waiters": 3,
+          "lock_samples": 9,
+          "intentional_hold_ms": 100
+        }
+      ]
+    }
+  }
+}
