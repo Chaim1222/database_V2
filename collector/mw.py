@@ -19,7 +19,9 @@ class MediaWiki:
 
     def get(self, params):
         params = {"format": "json", "formatversion": "2", "maxlag": 5, **params}
-        for attempt in range(6):
+        attempts = 8
+        for attempt in range(attempts):
+            wait = 2 ** min(attempt, 6)
             try:
                 # כותרות בעברית מקודדות פי כמה: בקשה ארוכה (למשל 50 כותרות) חורגת ממגבלת ה-URL (414). action=query נתמך גם ב-POST.
                 if sum(len(str(v)) for v in params.values()) > POST_THRESHOLD:
@@ -27,6 +29,11 @@ class MediaWiki:
                 else:
                     response = self.session.get(self.api_url, params=params, timeout=60)
                 if response.status_code in (429, 503):
+                    # הגבלת קצב: מכבדים Retry-After (עד 2 דקות), אחרת המתנה מעריכית; ההעשרה שולחת עשרות אלפי בקשות
+                    try:
+                        wait = min(max(wait, int(response.headers.get("Retry-After", 0))), 120)
+                    except (TypeError, ValueError):
+                        pass
                     raise requests.RequestException(f"HTTP {response.status_code}")
                 response.raise_for_status()
                 data = response.json()
@@ -36,9 +43,9 @@ class MediaWiki:
                     raise RuntimeError(f"שגיאת API: {data['error']}")
                 return data
             except (requests.RequestException, ValueError):
-                if attempt == 5:
+                if attempt == attempts - 1:
                     raise
-                self.sleep(2 ** attempt)
+                self.sleep(wait)
 
     def paged(self, params, list_key):
         params = dict(params)

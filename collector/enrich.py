@@ -7,6 +7,7 @@
   locks    - רמת הנעילה במכלול (inprop=allevel): create = נעול ליצירה (החרגה), read = נעול לקריאה (v1: check_missing_locked.py)
 כישלון בבדיקה לא נשלח למסד ולכן אינו דורס ערך קודם; הדף נשאר ממתין ויבדק בריצה הבאה.
 """
+import time
 import requests
 
 from .state import chunks
@@ -84,10 +85,14 @@ def fetch_desc(wikidata_mw, pages):
     return [{"wiki_id": wiki_id, "wikidata_desc": found.get(title, "")} for title, wiki_id in by_title.items()]
 
 
+CREATED_PACE = 0.05
+
+
 def fetch_created(wiki_mw, pages):
     """{wiki_id, created_at}: חותמת הגרסה הראשונה, או None כשאין (נשמר כנבדק). כשל API מפיל את הריצה."""
     rows = []
     for p in pages:
+        time.sleep(CREATED_PACE)   # בקשה לכל כותרת (25 אלף ויותר): הקצב מונע 429 מוויקיפדיה
         data = wiki_mw.get({"action": "query", "prop": "revisions", "titles": p["title"],
                             "rvprop": "timestamp", "rvlimit": 1, "rvdir": "newer"})
         page = (data["query"]["pages"] or [{}])[0]
