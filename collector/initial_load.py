@@ -57,7 +57,7 @@ MAX_PRUNE_RATE = 0.01   # שער מחיקה: rebuild שמוחק יותר מ-1% �
 def prune_stale(site, rpc, seen, log=print, max_rate=MAX_PRUNE_RATE):
     """שורות שבמראה ואינן בצילום המלא (נמחקו או הפכו להפניה בזמן שהמראה לא עודכנה) נמחקות, במנות ובשער מחיקה."""
     from .reconcile import read_db
-    db_titles, _ = read_db(rpc, site)
+    db_titles, _ = read_db(rpc, site, log=log)
     stale = sorted(set(db_titles) - seen)
     if len(stale) > max_rate * max(len(db_titles), 1):
         raise RuntimeError(f"{site}: {len(stale):,} שורות מיושנות מתוך {len(db_titles):,} חורגות משער המחיקה ({max_rate:.0%}); לא נמחק דבר")
