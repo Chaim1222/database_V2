@@ -11,7 +11,7 @@ begin
     if api.health_check() <> '[]'::jsonb then raise exception 'ok must report nothing'; end if;
 
     -- הצלחה ישנה: stale
-    update ops.sync_run set finished_at = now() - interval '4 hours' where kind = 'sync';
+    update ops.sync_run set finished_at = now() - (select max_age from ops.health_threshold where kind='sync') - interval '1 hour' where kind = 'sync';
     if (select state from ops.health() where kind = 'sync') <> 'stale' then raise exception 'expected stale'; end if;
 
     -- ריצה תקועה גוברת: running מעל 90 דקות
