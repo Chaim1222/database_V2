@@ -46,3 +46,8 @@ jobs:
         run: |
           PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
           git diff --exit-code db/schema.sql
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: generated-schema
+          path: db/schema.sql

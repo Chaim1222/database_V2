@@ -11,6 +11,7 @@ import time
 import requests
 
 from .state import chunks
+from .mw import query_field
 
 BATCH = 50
 GROUPS = ("redirect", "locks", "length", "desc", "created")
@@ -46,10 +47,19 @@ def fetch_length(wiki_mw, pages):
     by_title = {p["title"]: p["wiki_id"] for p in pages}
     data = wiki_mw.get({"action": "query", "prop": "info", "titles": "|".join(by_title)})
     rows = []
-    for page in data["query"]["pages"]:
-        wiki_id = by_title.get(page.get("title"))
+    normalized = {n["to"]: n["from"] for n in data.get("query", {}).get("normalized", [])}
+    seen = set()
+    for page in query_field(data, "pages"):
+        wiki_id = by_title.get(normalized.get(page.get("title"), page.get("title")))
+        if wiki_id is None:
+            raise RuntimeError("תשובת אורך עם כותרת שלא נשאלה")
+        seen.add(wiki_id)
+        if not page.get("missing") and "length" not in page:
+            raise RuntimeError("תשובת אורך ללא אורך הדף")
         if wiki_id and not page.get("missing") and "length" in page:
             rows.append({"wiki_id": wiki_id, "length": page["length"]})
+    if seen != set(by_title.values()):
+        raise RuntimeError("תשובת אורך חלקית")
     return rows
 
 
@@ -77,11 +87,19 @@ def fetch_desc(wikidata_mw, pages):
     by_title = {p["title"]: p["wiki_id"] for p in pages}
     data = wikidata_mw.get({"action": "wbgetentities", "sites": "hewiki", "titles": "|".join(by_title),
                             "props": "descriptions|sitelinks", "languages": "he"})
-    found = {}
-    for entity in (data.get("entities") or {}).values():
+    entities = data.get("entities")
+    if not isinstance(entities, dict) or not entities:
+        raise RuntimeError("תשובת ויקינתונים חסרה")
+    found, missing = {}, 0
+    for entity in entities.values():
+        if "missing" in entity:
+            missing += 1
+            continue
         title = ((entity.get("sitelinks") or {}).get("hewiki") or {}).get("title")
         if title:
             found[title] = ((entity.get("descriptions") or {}).get("he") or {}).get("value") or ""
+    if len(set(by_title) - set(found)) != missing:
+        raise RuntimeError("תשובת ויקינתונים אינה מכסה את כל הכותרות")
     return [{"wiki_id": wiki_id, "wikidata_desc": found.get(title, "")} for title, wiki_id in by_title.items()]
 
 
@@ -102,8 +120,15 @@ def fetch_created(wiki_mw, pages):
                 raise RuntimeError("יותר מדי כותרות נכשלו בשליפת תאריך יצירה: כנראה הגבלה או חסימה כללית") from exc
             print(f"תאריך יצירה: כשל על {p['title']!r} ({exc}), מדלג")
             continue
-        page = (data["query"]["pages"] or [{}])[0]
+        returned = query_field(data, "pages")
+        if len(returned) != 1:
+            raise RuntimeError("תשובת תאריך יצירה חסרה או כפולה")
+        page = returned[0]
+        if "pageid" in page and not page.get("missing") and page["pageid"] != p["wiki_id"]:
+            raise RuntimeError("מזהה הדף השתנה בשליפת תאריך יצירה")
         revisions = page.get("revisions") or []
+        if not page.get("missing") and (not revisions or not revisions[0].get("timestamp")):
+            raise RuntimeError("תאריך יצירה חסר לדף חי")
         rows.append({"wiki_id": p["wiki_id"], "created_at": revisions[0]["timestamp"] if revisions and not page.get("missing") else None})
     return rows
 

@@ -13,6 +13,7 @@ on:
 concurrency:
   group: ${{ inputs.apply && 'v2-db-write' || format('migrate-check-{0}', github.run_id) }}   # בדיקה בלבד (קריאה) לא ממתינה לשרשרת
   cancel-in-progress: false
+  queue: max
 
 jobs:
   migrate:

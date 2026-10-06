@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../db/migrations"
 : "${DATABASE_URL:?חסר DATABASE_URL}"
 q() { psql "$DATABASE_URL" -X -q -t -A -v ON_ERROR_STOP=1 "$@"; }
-applied=$(q -c "select version from ops.schema_migration order by version" 2>/dev/null || true)
+applied=$(q -c "select version from ops.schema_migration order by version")
 pending=(); in_repo=()
 for f in [0-9]*.sql; do
   v=${f%%_*}; in_repo+=("$v")

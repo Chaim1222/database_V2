@@ -7,6 +7,7 @@ import html
 import re
 
 from .normalize import title_key
+from .mw import query_field
 from .state import chunks, is_live
 
 TEMPLATE_START_RE = re.compile(r"\{\{\s*מיון\s+ויקיפדיה\s*\|")
@@ -119,12 +120,24 @@ def fetch_contents(mw, page_ids):
         result.update(fetch_contents(mw, page_ids[:mid]))
         result.update(fetch_contents(mw, page_ids[mid:]))
         return result
-    for page in data["query"]["pages"]:
+    seen = set()
+    for page in query_field(data, "pages"):
+        pid = page.get("pageid")
+        if pid not in result or pid in seen:
+            raise RuntimeError("תשובת תוכן עם מזהה לא צפוי או כפול")
+        seen.add(pid)
         revisions = page.get("revisions") or []
-        if page.get("missing") or not revisions:
+        if page.get("missing"):
             continue
+        if not revisions:
+            raise RuntimeError(f"לא התקבלה גרסה עבור {pid}")
         rev = revisions[0]
-        result[page["pageid"]] = {"rev_id": rev["revid"], "content": rev.get("slots", {}).get("main", {}).get("content", "")}
+        content = rev.get("slots", {}).get("main", {}).get("content")
+        if not isinstance(content, str) or not isinstance(rev.get("revid"), int):
+            raise RuntimeError(f"תוכן או מזהה גרסה חסר עבור {pid}")
+        result[pid] = {"rev_id": rev["revid"], "content": content}
+    if seen != set(page_ids):
+        raise RuntimeError(f"תשובת תוכן חלקית: {sorted(set(page_ids) - seen)[:5]}")
     return result
 
 

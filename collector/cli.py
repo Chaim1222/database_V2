@@ -46,7 +46,10 @@ def main(argv):
     elif argv[0] == "revcheck":
         stats = run_revcheck(mws["wikipedia"], rpc)
     elif argv[0] == "reconcile":
-        stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv, fix="--fix" in argv)["sites"]}}
+        report = run_reconcile(mws, rpc, skip_mechalol="--skip-mechalol" in argv, fix="--fix" in argv)
+        stats = {"unexplained": {s["site"]: s["unexplained_pages"] for s in report["sites"]}}
+        print(json.dumps(stats, ensure_ascii=False, indent=2))
+        return 0 if report["ok"] else 1
     elif argv[0] == "enrich":
         clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"], "wikidata": MediaWiki(WIKIDATA_API)}
         groups = argv[1:] or list(GROUPS)

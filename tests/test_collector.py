@@ -647,7 +647,8 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual((classes["only_source"]["n"], classes["only_db"]["n"], classes["title"]["n"]), (1, 1, 1))
         kinds = sorted((f["class"], f["page_id"]) for f in rpc.recorded["p_findings"])
         self.assertEqual(kinds, [("only_db", 9), ("only_source", 3), ("title", 2)])
-        self.assertEqual(rpc.calls[-1][1]["p_status"], "succeeded")
+        self.assertFalse(report["ok"])
+        self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
 
     def test_v1_comparison_and_conflicts(self):
         from collector.reconcile import run_reconcile, v1_vs_v2
@@ -718,9 +719,9 @@ class RevCheckTests(unittest.TestCase):
                 if "revids" in params:
                     pages = [{"pageid": 5, "title": "חי", "ns": 0, "revisions": [{"revid": 50}]},
                              {"pageid": 6, "title": "הפניה", "ns": 0, "redirect": True, "revisions": [{"revid": 60}]}]
-                    return {"query": {"pages": pages}}
+                    return {"query": {"pages": pages, "badrevids": {"70": {"revid": 70, "missing": True}}}}
                 if "titles" in params:
-                    return {"query": {"redirects": [{"from": "הפניה", "to": "יעד אחר"}]}}
+                    return {"query": {"redirects": [{"from": "הפניה", "to": "יעד אחר"}], "pages": [{"pageid": 7, "title": "יעד אחר", "ns": 0}]}}
                 return {"query": {"recentchanges": [{"revid": 1000}]}}
         rows = [{"mech_id": 1, "template_rev": 50, "template_title": "חי"}, {"mech_id": 2, "template_rev": 60, "template_title": "משהו"},
                 {"mech_id": 3, "template_rev": 0}, {"mech_id": 4, "template_rev": 70, "template_title": "x"}]
