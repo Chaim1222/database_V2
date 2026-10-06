@@ -19,7 +19,9 @@ begin
     if (select array_agg(id) from api.report_missing_from_mechalol) <> array[2::bigint] then
         raise exception 'missing should be only page 2: %', (select array_agg(id) from api.report_missing_from_mechalol);
     end if;
-    if (select n from ops.dashboard_counts where key = 'missing') <> 1 then raise exception 'missing count after import'; end if;
+    -- מאז 0029 הייבוא מדלג על ספירות בכל שורה; הקולקטור מרענן פעם אחת אחרי כל המנות.
+    perform api.maintenance_refresh_counts();
+    if (select n from ops.dashboard_counts where key = 'missing') is distinct from 1 then raise exception 'missing count after import'; end if;
     -- הרצה חוזרת: לא מוסיפה שורות
     r := api.import_human_data('00000000-0000-0000-0000-0000000000a1',
         '[{"mechalol_page_id":10,"wikipedia_page_id":1}]', '[{"title":"נעול ליצירה"}]',
