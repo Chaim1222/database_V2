@@ -9,7 +9,7 @@ run() { "${RUN[@]}" "$1"; }
 trap 'run "psql -X -q -d postgres -c \"drop database if exists $DB\"" >/dev/null 2>&1 || true' EXIT
 run "psql -X -q -d postgres -c 'create database $DB'" >/dev/null
 run "psql -X -q -v ON_ERROR_STOP=1 -d $DB -f '$PWD/tests/00_supabase_stub.sql'"
-for f in migrations/*.sql; do run "psql -X -q -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$f'" >/dev/null; done
+for f in migrations/*.sql; do run "psql -X -q -1 -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$f'" >/dev/null; done
 {
   echo "-- נוצר אוטומטית מ-db/migrations (db/gen_schema.sh). אין לערוך ידנית."
   run "pg_dump -d $DB --schema-only --no-owner --no-comments --schema=ref --schema=mirror --schema=derived --schema=enrich --schema=work --schema=ops --schema=api" \
