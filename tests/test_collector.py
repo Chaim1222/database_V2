@@ -439,7 +439,7 @@ class EnrichTests(unittest.TestCase):
 
     def test_length_skips_missing(self):
         from collector.enrich import fetch_length
-        mw = self.Mw({"query": {"pages": [{"title": "א", "length": 100}, {"title": "ב", "missing": True}]}})
+        mw = self.Mw({"query": {"pages": [{"pageid": 1, "title": "א", "length": 100}, {"title": "ב", "missing": True}]}})
         rows = fetch_length(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])
         self.assertEqual(rows, [{"wiki_id": 1, "length": 100}])
 
@@ -469,10 +469,10 @@ class EnrichTests(unittest.TestCase):
 
     def test_created(self):
         from collector.enrich import fetch_created
-        mw = self.Mw(lambda p: {"query": {"pages": [{"title": p["titles"], "revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}
+        mw = self.Mw(lambda p: {"query": {"pages": [{"pageid": 1, "title": p["titles"], "revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}
                                                   if p["titles"] == "א" else {"title": p["titles"], "missing": True}]}})
         rows = fetch_created(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])
-        self.assertEqual(rows, [{"wiki_id": 1, "created_at": "2020-01-01T00:00:00Z"}, {"wiki_id": 2, "created_at": None}])
+        self.assertEqual(rows, [{"wiki_id": 1, "created_at": "2020-01-01T00:00:00Z"}])
 
     def test_run_group_loops_until_empty_and_failure_sends_nothing(self):
         from collector.enrich import run_group
@@ -489,7 +489,7 @@ class EnrichTests(unittest.TestCase):
                     self.served = True
                     return [{"wiki_id": 1, "title": "א"}]
         rpc = Rpc()
-        mw = self.Mw({"query": {"pages": [{"title": "א", "length": 5}]}})
+        mw = self.Mw({"query": {"pages": [{"pageid": 1, "title": "א", "length": 5}]}})
         self.assertEqual(run_group("length", {"wiki": mw}, rpc, log=lambda *_: None), 1)
         self.assertEqual([c[0] for c in rpc.calls], ["enrich_pending", "sync_apply_enrichment", "enrich_pending"])
 
@@ -512,7 +512,7 @@ class EnrichTests(unittest.TestCase):
             def get(self, params):
                 if params["titles"] == "ב":
                     raise requests.RequestException("HTTP 429")
-                return {"query": {"pages": [{"revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}]}}
+                return {"query": {"pages": [{"pageid": {"א": 1, "ג": 3}[params["titles"]], "revisions": [{"timestamp": "2020-01-01T00:00:00Z"}]}]}}
         rows = enrich.fetch_created(Mw(), [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}, {"wiki_id": 3, "title": "ג"}])
         self.assertEqual([r["wiki_id"] for r in rows], [1, 3])
         self.assertEqual(enrich.SKIP_BUDGET["left"], 0)
@@ -647,7 +647,8 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual((classes["only_source"]["n"], classes["only_db"]["n"], classes["title"]["n"]), (1, 1, 1))
         kinds = sorted((f["class"], f["page_id"]) for f in rpc.recorded["p_findings"])
         self.assertEqual(kinds, [("only_db", 9), ("only_source", 3), ("title", 2)])
-        self.assertEqual(rpc.calls[-1][1]["p_status"], "succeeded")
+        self.assertEqual(rpc.calls[-1][1]["p_status"], "failed")
+        self.assertFalse(report["ok"])
 
     def test_v1_comparison_and_conflicts(self):
         from collector.reconcile import run_reconcile, v1_vs_v2

@@ -62,7 +62,11 @@ def _paged(api_get, params, list_key):
     params = dict(params)
     while True:
         data = api_get(params)
-        yield from data.get("query", {}).get(list_key, [])
+        query = data.get("query") if isinstance(data, dict) else None
+        entries = query.get(list_key) if isinstance(query, dict) else None
+        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+            raise RuntimeError(f"תשובת חלון השוואה חסרה או פגומה: {list_key}")
+        yield from entries
         cont = data.get("continue")
         if not cont:
             return
