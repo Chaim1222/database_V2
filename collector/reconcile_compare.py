@@ -62,7 +62,8 @@ def _paged(api_get, params, list_key):
     params = dict(params)
     while True:
         data = api_get(params)
-        yield from data.get("query", {}).get(list_key, [])
+        from .mw import query_field
+        yield from query_field(data, list_key)
         cont = data.get("continue")
         if not cont:
             return
@@ -198,7 +199,7 @@ def summarize_site(site, source_count, db_count, title_diff, class_changes, wind
 
 def render_markdown(report):
     """דוח קריא לסיכום הריצה. report = {"run_id", "snapshot": {...}, "sites": [summarize_site(...)]}."""
-    lines = [f"# דוח reconcile (דוח בלבד, בלי כתיבה) | ריצה {report['run_id']}", ""]
+    lines = [f"# דוח reconcile | ריצה {report['run_id']}", ""]
     for key, value in sorted(report.get("snapshot", {}).items()):
         lines.append(f"- {key}: {value}")
     lines.append("")
