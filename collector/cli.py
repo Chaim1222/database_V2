@@ -1,4 +1,4 @@
-"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | smoke   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
+"""python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | movecheck | smoke   (משתני סביבה: SUPABASE_URL, SUPABASE_SERVICE_KEY)"""
 import json
 import os
 import sys
@@ -9,7 +9,7 @@ from .dump import DumpSource
 from .enrich import GROUPS, WIKIDATA_API, run_group
 from .initial_load import run_initial_load
 from .reconcile import run_reconcile
-from .revcheck import run_revcheck
+from .revcheck import run_revcheck, run_movecheck
 from .smoke import run_smoke
 from .sync import run_sync
 from .templates import run_pending
@@ -18,8 +18,8 @@ APIS = {"wikipedia": "https://he.wikipedia.org/w/api.php", "mechalol": "https://
 
 
 def main(argv):
-    if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"], ["smoke"]):
-        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | smoke", file=sys.stderr)
+    if argv[:1] not in (["sync"], ["load"], ["rebuild"], ["templates"], ["health"]) and argv[:1] not in (["enrich"], ["reconcile"], ["maintenance"], ["revcheck"], ["movecheck"], ["smoke"]):
+        print("שימוש: python -m collector.cli sync [--dry-run] | load | rebuild | templates | health | enrich [group...] | reconcile [--skip-mechalol] [--fix] | maintenance | revcheck | movecheck | smoke", file=sys.stderr)
         return 2
     if argv[0] == "smoke":   # קורא בלבד מהאתרים, בלי מסד
         failures = run_smoke({site: MediaWiki(url) for site, url in APIS.items()})
@@ -43,6 +43,8 @@ def main(argv):
     mws = {site: MediaWiki(url) for site, url in APIS.items()}
     if argv[0] == "sync":
         stats = run_sync(mws, rpc, dry_run="--dry-run" in argv)
+    elif argv[0] == "movecheck":
+        stats = run_movecheck(mws["mechalol"], mws["wikipedia"], rpc)
     elif argv[0] == "revcheck":
         stats = run_revcheck(mws["wikipedia"], rpc)
     elif argv[0] == "reconcile":

@@ -32,10 +32,31 @@ def names_match(mech_title, wiki_title):
     return False
 
 
-def resolve_revisions(wiki_mw, rev_ids):
+def resolve_revisions(wiki_mw, rev_ids, strict=False):
     """{rev_id: {page_id, title, ns, redirect} | None (לא קיימת)} לבקשה אחת (עד 50)."""
     result = {r: None for r in rev_ids}
     data = wiki_mw.get({"action": "query", "revids": "|".join(map(str, rev_ids)), "prop": "revisions|info", "rvprop": "ids"})
+    if strict:
+        query = data.get("query") if isinstance(data, dict) else None
+        if not isinstance(query, dict) or not isinstance(query.get("pages"), list) or "error" in data:
+            raise RuntimeError("Incomplete Wikipedia revision response")
+        answered = set()
+        for page in query["pages"]:
+            if not isinstance(page, dict):
+                raise RuntimeError("Malformed Wikipedia page")
+            for rev in page.get("revisions", []):
+                rid = rev.get("revid") if isinstance(rev, dict) else None
+                if (rid not in result or rid in answered or not isinstance(page.get("pageid"), int)
+                        or page["pageid"] <= 0 or not isinstance(page.get("ns"), int)
+                        or not isinstance(page.get("title"), str)):
+                    raise RuntimeError("Malformed Wikipedia revision identity")
+                answered.add(rid)
+        bad = query.get("badrevids", {})
+        if not isinstance(bad, dict):
+            raise RuntimeError("Malformed badrevids response")
+        bad_ids = {int(r) for r in bad if str(r).isdigit()}
+        if answered & bad_ids or answered | bad_ids != set(rev_ids):
+            raise RuntimeError("Wikipedia omitted or duplicated a requested revision")
     for page in data.get("query", {}).get("pages", []):
         info = {"page_id": page.get("pageid"), "title": page.get("title"), "ns": page.get("ns"), "redirect": bool(page.get("redirect"))}
         for revision in page.get("revisions") or []:
@@ -108,3 +129,45 @@ def run_revcheck(wiki_mw, rpc, log=print):
         rpc.call("sync_apply_rev_checks", {"p_rows": findings, "p_scope_ids": [r["mech_id"] for r in rows]})
         scanned, found, after = scanned + len(rows), found + len(findings), rows[-1]["mech_id"]
         log(f"גרסאות: נבדקו {scanned:,}, ממצאים {found:,}")
+
+
+def move_proof(row, fetched, resolved):
+    """Only a fresh template revision whose current page agrees with the explicit source name proves identity."""
+    from .templates import parse_template
+
+    proof = {"mech_id": row["mech_id"], "mech_rev_id": None,
+             "source_rev_id": None, "source_title": None, "wiki_id": None}
+    if not isinstance(fetched, dict):
+        return proof
+    parsed = parse_template(fetched["content"])
+    if (not parsed or not parsed["title"] or not parsed["rev"]
+            or fetched["rev_id"] != row.get("local_rev_id")
+            or parsed["rev"] != row.get("template_rev")
+            or title_key(parsed["title"]) != title_key(row.get("template_title") or "")):
+        return proof
+    source = resolved.get(parsed["rev"])
+    if (not source or source["ns"] != 0 or source["redirect"]
+            or title_key(parsed["title"]) != title_key(source["title"])):
+        return proof
+    proof.update(mech_rev_id=fetched["rev_id"], source_rev_id=parsed["rev"],
+                 source_title=parsed["title"], wiki_id=source["page_id"])
+    return proof
+
+
+def run_movecheck(mech_mw, wiki_mw, rpc):
+    """Recheck all candidates, including previously suppressed ones; failure does not invent proof."""
+    from .templates import fetch_contents
+
+    after, checked, proven = 0, 0, 0
+    while True:
+        rows = rpc.call("move_source_scope", {"p_after": after, "p_limit": BATCH}) or []
+        if not rows:
+            return {"checked": checked, "proven": proven}
+        fetched = fetch_contents(mech_mw, [r["mech_id"] for r in rows])
+        revs = sorted({r["template_rev"] for r in rows if r.get("template_rev") and r["template_rev"] > 1})
+        resolved = resolve_revisions(wiki_mw, revs, strict=True) if revs else {}
+        proofs = [move_proof(r, fetched.get(r["mech_id"]), resolved) for r in rows]
+        rpc.call("sync_apply_move_sources", {"p_rows": proofs})
+        checked += len(proofs)
+        proven += sum(p["wiki_id"] is not None for p in proofs)
+        after = rows[-1]["mech_id"]
