@@ -289,6 +289,21 @@ CREATE FUNCTION api.match_conflicts() RETURNS TABLE(kind text, mech_id bigint, m
 $$;
 
 --
+-- Name: move_source_scope(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.move_source_scope(p_after bigint DEFAULT 0, p_limit integer DEFAULT 50) RETURNS TABLE(mech_id bigint, title text, local_rev_id bigint, template_rev bigint, template_title text)
+    LANGUAGE sql STABLE
+    SET search_path TO ''
+    AS $$
+    select distinct h.id, h.title, t.rev_id, t.template_rev, t.template_title
+    from api.move_candidates h
+    left join derived.template_check t on t.mech_id = h.id and t.outcome <> 'denied'
+    where h.id > p_after
+    order by h.id limit p_limit;
+$$;
+
+--
 -- Name: reconcile_pages(text, bigint, integer); Type: FUNCTION; Schema: api; Owner: -
 --
 
@@ -596,6 +611,22 @@ begin
     return jsonb_build_object('live', cardinality(v_ids), 'inserted', v_inserted, 'updated', v_updated,
                               'deleted', v_deleted, 'gap_changed', v_gap, 'wiki_refreshed', cardinality(v_wiki_ids));
 end;
+$$;
+
+--
+-- Name: sync_apply_move_sources(jsonb); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.sync_apply_move_sources(p_rows jsonb) RETURNS void
+    LANGUAGE sql
+    SET search_path TO ''
+    AS $$
+    insert into derived.move_source as e (mech_id, mech_rev_id, source_rev_id, source_title, wiki_id)
+    select r.mech_id, r.mech_rev_id, r.source_rev_id, r.source_title, r.wiki_id
+    from jsonb_to_recordset(p_rows) r(mech_id bigint, mech_rev_id bigint, source_rev_id bigint, source_title text, wiki_id bigint)
+    on conflict (mech_id) do update set mech_rev_id = excluded.mech_rev_id,
+        source_rev_id = excluded.source_rev_id, source_title = excluded.source_title,
+        wiki_id = excluded.wiki_id, checked_at = now();
 $$;
 
 --
@@ -1167,6 +1198,34 @@ CREATE VIEW api.mechalol_pages WITH (security_invoker='true') AS
      JOIN ref.mech_status ms ON ((ms.code = m.status)));
 
 --
+-- Name: template_link; Type: TABLE; Schema: derived; Owner: -
+--
+
+CREATE TABLE derived.template_link (
+    mech_id bigint NOT NULL,
+    wiki_id bigint,
+    template_ref text,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: page_event; Type: TABLE; Schema: mirror; Owner: -
+--
+
+CREATE TABLE mirror.page_event (
+    id bigint NOT NULL,
+    site text NOT NULL,
+    kind text NOT NULL,
+    page_id bigint NOT NULL,
+    title text NOT NULL,
+    new_title text,
+    ts timestamp with time zone NOT NULL,
+    run_id uuid,
+    CONSTRAINT page_event_kind_check CHECK ((kind = ANY (ARRAY['create'::text, 'delete'::text, 'move'::text, 'restore'::text]))),
+    CONSTRAINT page_event_site_check CHECK ((site = ANY (ARRAY['wikipedia'::text, 'mechalol'::text])))
+);
+
+--
 -- Name: wiki_page; Type: TABLE; Schema: mirror; Owner: -
 --
 
@@ -1175,6 +1234,82 @@ CREATE TABLE mirror.wiki_page (
     title text NOT NULL,
     latest_rev_id bigint
 );
+
+--
+-- Name: manual_link; Type: TABLE; Schema: work; Owner: -
+--
+
+CREATE TABLE work.manual_link (
+    mech_id bigint NOT NULL,
+    wiki_id bigint NOT NULL,
+    reason text,
+    created_by uuid DEFAULT auth.uid(),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: move_candidates; Type: VIEW; Schema: api; Owner: -
+--
+
+CREATE VIEW api.move_candidates WITH (security_invoker='true') AS
+ WITH last_move AS (
+         SELECT DISTINCT ON (ev.page_id, ev.title) ev.page_id,
+            ev.title,
+            ev.ts
+           FROM mirror.page_event ev
+          WHERE ((ev.site = 'wikipedia'::text) AND (ev.kind = 'move'::text))
+          ORDER BY ev.page_id, ev.title, ev.ts DESC, ev.id DESC
+        ), latest_event AS (
+         SELECT DISTINCT ON (ev.page_id) ev.page_id,
+            ev.kind,
+            ev.new_title
+           FROM mirror.page_event ev
+          WHERE ((ev.site = 'wikipedia'::text) AND (ev.page_id > 0))
+          ORDER BY ev.page_id, ev.ts DESC, ev.id DESC
+        ), current_source AS (
+         SELECT e.page_id,
+            COALESCE(w_1.title, e.new_title) AS title
+           FROM (latest_event e
+             LEFT JOIN mirror.wiki_page w_1 ON ((w_1.page_id = e.page_id)))
+          WHERE ((w_1.page_id IS NOT NULL) OR ((e.kind = 'move'::text) AND (e.new_title ~~ 'טיוטה:%'::text)))
+        ), hits AS (
+         SELECT m_1.page_id AS mech_id,
+            lm.page_id AS wiki_id,
+            lm.title AS old_title,
+            lm.ts,
+            'title'::text AS via
+           FROM (last_move lm
+             JOIN mirror.mech_page m_1 ON ((mirror.title_key(m_1.title) = mirror.title_key(lm.title))))
+          WHERE ((NOT (EXISTS ( SELECT 1
+                   FROM derived.template_link t
+                  WHERE ((t.mech_id = m_1.page_id) AND (t.wiki_id IS NOT NULL) AND (t.wiki_id <> lm.page_id))))) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.manual_link x
+                  WHERE ((x.mech_id = m_1.page_id) AND (x.wiki_id <> lm.page_id))))))
+        UNION ALL
+         SELECT m_1.page_id,
+            lm.page_id,
+            lm.title,
+            lm.ts,
+            'template'::text AS text
+           FROM ((last_move lm
+             JOIN derived.template_link t ON (((mirror.title_key(t.template_ref) = mirror.title_key(lm.title)) AND (t.wiki_id IS NULL) AND (t.template_ref IS NOT NULL))))
+             JOIN mirror.mech_page m_1 ON ((m_1.page_id = t.mech_id)))
+          WHERE ((m_1.status <> 'kept_after_wiki_delete'::text) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.manual_link x
+                  WHERE (x.mech_id = m_1.page_id)))))
+        )
+ SELECT DISTINCT ON (h.mech_id) h.mech_id AS id,
+    m.title,
+    h.old_title,
+    w.title AS wikipedia_title,
+    h.ts AS moved_at,
+    h.via,
+    h.wiki_id
+   FROM ((hits h
+     JOIN mirror.mech_page m ON ((m.page_id = h.mech_id)))
+     JOIN current_source w ON ((w.page_id = h.wiki_id)))
+  WHERE (mirror.title_key(m.title) <> mirror.title_key(w.title))
+  ORDER BY h.mech_id, (h.via = 'title'::text) DESC, h.ts DESC, h.wiki_id, h.old_title;
 
 --
 -- Name: exclusion; Type: TABLE; Schema: work; Owner: -
@@ -1372,18 +1507,6 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
      LEFT JOIN enrich.content_scan s ON ((s.wiki_id = m.id)));
 
 --
--- Name: manual_link; Type: TABLE; Schema: work; Owner: -
---
-
-CREATE TABLE work.manual_link (
-    mech_id bigint NOT NULL,
-    wiki_id bigint NOT NULL,
-    reason text,
-    created_by uuid DEFAULT auth.uid(),
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
---
 -- Name: v_rav_review; Type: VIEW; Schema: api; Owner: -
 --
 
@@ -1529,31 +1652,17 @@ CREATE VIEW api.report_undocumented_import WITH (security_invoker='true') AS
    FROM api.v_undocumented u;
 
 --
--- Name: template_link; Type: TABLE; Schema: derived; Owner: -
+-- Name: move_source; Type: TABLE; Schema: derived; Owner: -
 --
 
-CREATE TABLE derived.template_link (
+CREATE TABLE derived.move_source (
     mech_id bigint NOT NULL,
+    mech_rev_id bigint,
+    source_rev_id bigint,
+    source_title text,
     wiki_id bigint,
-    template_ref text,
-    verified_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
---
--- Name: page_event; Type: TABLE; Schema: mirror; Owner: -
---
-
-CREATE TABLE mirror.page_event (
-    id bigint NOT NULL,
-    site text NOT NULL,
-    kind text NOT NULL,
-    page_id bigint NOT NULL,
-    title text NOT NULL,
-    new_title text,
-    ts timestamp with time zone NOT NULL,
-    run_id uuid,
-    CONSTRAINT page_event_kind_check CHECK ((kind = ANY (ARRAY['create'::text, 'delete'::text, 'move'::text, 'restore'::text]))),
-    CONSTRAINT page_event_site_check CHECK ((site = ANY (ARRAY['wikipedia'::text, 'mechalol'::text])))
+    checked_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT move_source_check CHECK (((wiki_id IS NULL) OR ((wiki_id > 0) AND (mech_rev_id IS NOT NULL) AND (mech_rev_id > 0) AND (source_rev_id IS NOT NULL) AND (source_rev_id > 1) AND (source_title IS NOT NULL))))
 );
 
 --
@@ -1561,64 +1670,18 @@ CREATE TABLE mirror.page_event (
 --
 
 CREATE VIEW api.v_moves WITH (security_invoker='true') AS
- WITH last_move AS (
-         SELECT DISTINCT ON (ev.page_id, ev.title) ev.page_id,
-            ev.title,
-            ev.ts
-           FROM mirror.page_event ev
-          WHERE ((ev.site = 'wikipedia'::text) AND (ev.kind = 'move'::text))
-          ORDER BY ev.page_id, ev.title, ev.ts DESC, ev.id DESC
-        ), latest_event AS (
-         SELECT DISTINCT ON (ev.page_id) ev.page_id,
-            ev.kind,
-            ev.new_title
-           FROM mirror.page_event ev
-          WHERE ((ev.site = 'wikipedia'::text) AND (ev.page_id > 0))
-          ORDER BY ev.page_id, ev.ts DESC, ev.id DESC
-        ), current_source AS (
-         SELECT e.page_id,
-            COALESCE(w_1.title, e.new_title) AS title
-           FROM (latest_event e
-             LEFT JOIN mirror.wiki_page w_1 ON ((w_1.page_id = e.page_id)))
-          WHERE ((w_1.page_id IS NOT NULL) OR ((e.kind = 'move'::text) AND (e.new_title ~~ 'טיוטה:%'::text)))
-        ), hits AS (
-         SELECT m_1.page_id AS mech_id,
-            lm.page_id AS wiki_id,
-            lm.title AS old_title,
-            lm.ts,
-            'title'::text AS via
-           FROM (last_move lm
-             JOIN mirror.mech_page m_1 ON ((mirror.title_key(m_1.title) = mirror.title_key(lm.title))))
-          WHERE ((NOT (EXISTS ( SELECT 1
-                   FROM derived.template_link t
-                  WHERE ((t.mech_id = m_1.page_id) AND (t.wiki_id IS NOT NULL) AND (t.wiki_id <> lm.page_id))))) AND (NOT (EXISTS ( SELECT 1
-                   FROM work.manual_link x
-                  WHERE ((x.mech_id = m_1.page_id) AND (x.wiki_id <> lm.page_id))))))
-        UNION ALL
-         SELECT m_1.page_id,
-            lm.page_id,
-            lm.title,
-            lm.ts,
-            'template'::text AS text
-           FROM ((last_move lm
-             JOIN derived.template_link t ON (((mirror.title_key(t.template_ref) = mirror.title_key(lm.title)) AND (t.wiki_id IS NULL) AND (t.template_ref IS NOT NULL))))
-             JOIN mirror.mech_page m_1 ON ((m_1.page_id = t.mech_id)))
-          WHERE ((m_1.status <> 'kept_after_wiki_delete'::text) AND (NOT (EXISTS ( SELECT 1
-                   FROM work.manual_link x
-                  WHERE (x.mech_id = m_1.page_id)))))
-        )
- SELECT DISTINCT ON (h.mech_id) h.mech_id AS id,
-    m.title,
-    h.old_title,
-    w.title AS wikipedia_title,
-    h.ts AS moved_at,
-    h.via,
-    h.wiki_id
-   FROM ((hits h
-     JOIN mirror.mech_page m ON ((m.page_id = h.mech_id)))
-     JOIN current_source w ON ((w.page_id = h.wiki_id)))
-  WHERE (mirror.title_key(m.title) <> mirror.title_key(w.title))
-  ORDER BY h.mech_id, (h.via = 'title'::text) DESC, h.ts DESC, h.wiki_id, h.old_title;
+ SELECT id,
+    title,
+    old_title,
+    wikipedia_title,
+    moved_at,
+    via,
+    wiki_id
+   FROM api.move_candidates h
+  WHERE (NOT (EXISTS ( SELECT
+           FROM (derived.move_source e
+             JOIN derived.template_check t ON ((t.mech_id = e.mech_id)))
+          WHERE ((e.mech_id = h.id) AND (e.wiki_id <> h.wiki_id) AND (t.outcome <> 'denied'::text) AND (t.rev_id = e.mech_rev_id) AND (t.template_rev = e.source_rev_id) AND (mirror.title_key(t.template_title) = mirror.title_key(e.source_title))))));
 
 --
 -- Name: report_wikipedia_moves; Type: VIEW; Schema: api; Owner: -
@@ -2043,6 +2106,13 @@ ALTER TABLE ONLY derived.mech_key
     ADD CONSTRAINT mech_key_pkey PRIMARY KEY (mech_id);
 
 --
+-- Name: move_source move_source_pkey; Type: CONSTRAINT; Schema: derived; Owner: -
+--
+
+ALTER TABLE ONLY derived.move_source
+    ADD CONSTRAINT move_source_pkey PRIMARY KEY (mech_id);
+
+--
 -- Name: rev_check rev_check_pkey; Type: CONSTRAINT; Schema: derived; Owner: -
 --
 
@@ -2426,10 +2496,22 @@ ALTER TABLE ONLY work.admin
 ALTER TABLE derived.mech_key ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: move_source; Type: ROW SECURITY; Schema: derived; Owner: -
+--
+
+ALTER TABLE derived.move_source ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: mech_key public_read; Type: POLICY; Schema: derived; Owner: -
 --
 
 CREATE POLICY public_read ON derived.mech_key FOR SELECT TO anon, authenticated USING (true);
+
+--
+-- Name: move_source public_read; Type: POLICY; Schema: derived; Owner: -
+--
+
+CREATE POLICY public_read ON derived.move_source FOR SELECT TO anon, authenticated USING (true);
 
 --
 -- Name: rev_check public_read; Type: POLICY; Schema: derived; Owner: -
@@ -2844,6 +2926,13 @@ REVOKE ALL ON FUNCTION api.match_conflicts() FROM PUBLIC;
 GRANT ALL ON FUNCTION api.match_conflicts() TO service_role;
 
 --
+-- Name: FUNCTION move_source_scope(p_after bigint, p_limit integer); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.move_source_scope(p_after bigint, p_limit integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.move_source_scope(p_after bigint, p_limit integer) TO service_role;
+
+--
 -- Name: FUNCTION reconcile_pages(p_site text, p_after bigint, p_limit integer); Type: ACL; Schema: api; Owner: -
 --
 
@@ -2906,6 +2995,13 @@ GRANT ALL ON FUNCTION api.sync_apply_enrichment(p_group text, p_rows jsonb) TO s
 
 REVOKE ALL ON FUNCTION api.sync_apply_mech_pages(p_live jsonb, p_gone_ids bigint[], p_gone_titles text[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION api.sync_apply_mech_pages(p_live jsonb, p_gone_ids bigint[], p_gone_titles text[]) TO service_role;
+
+--
+-- Name: FUNCTION sync_apply_move_sources(p_rows jsonb); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.sync_apply_move_sources(p_rows jsonb) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.sync_apply_move_sources(p_rows jsonb) TO service_role;
 
 --
 -- Name: FUNCTION sync_apply_rev_checks(p_rows jsonb, p_scope_ids bigint[]); Type: ACL; Schema: api; Owner: -
@@ -3062,12 +3158,44 @@ GRANT SELECT ON TABLE api.mechalol_pages TO anon;
 GRANT SELECT ON TABLE api.mechalol_pages TO authenticated;
 
 --
+-- Name: TABLE template_link; Type: ACL; Schema: derived; Owner: -
+--
+
+GRANT ALL ON TABLE derived.template_link TO service_role;
+GRANT SELECT ON TABLE derived.template_link TO anon;
+GRANT SELECT ON TABLE derived.template_link TO authenticated;
+
+--
+-- Name: TABLE page_event; Type: ACL; Schema: mirror; Owner: -
+--
+
+GRANT ALL ON TABLE mirror.page_event TO service_role;
+GRANT SELECT ON TABLE mirror.page_event TO anon;
+GRANT SELECT ON TABLE mirror.page_event TO authenticated;
+
+--
 -- Name: TABLE wiki_page; Type: ACL; Schema: mirror; Owner: -
 --
 
 GRANT ALL ON TABLE mirror.wiki_page TO service_role;
 GRANT SELECT ON TABLE mirror.wiki_page TO anon;
 GRANT SELECT ON TABLE mirror.wiki_page TO authenticated;
+
+--
+-- Name: TABLE manual_link; Type: ACL; Schema: work; Owner: -
+--
+
+GRANT ALL ON TABLE work.manual_link TO service_role;
+GRANT SELECT ON TABLE work.manual_link TO anon;
+GRANT SELECT,DELETE ON TABLE work.manual_link TO authenticated;
+
+--
+-- Name: TABLE move_candidates; Type: ACL; Schema: api; Owner: -
+--
+
+GRANT ALL ON TABLE api.move_candidates TO service_role;
+GRANT SELECT ON TABLE api.move_candidates TO anon;
+GRANT SELECT ON TABLE api.move_candidates TO authenticated;
 
 --
 -- Name: TABLE exclusion; Type: ACL; Schema: work; Owner: -
@@ -3142,14 +3270,6 @@ GRANT SELECT ON TABLE api.report_missing_word_filter TO anon;
 GRANT SELECT ON TABLE api.report_missing_word_filter TO authenticated;
 
 --
--- Name: TABLE manual_link; Type: ACL; Schema: work; Owner: -
---
-
-GRANT ALL ON TABLE work.manual_link TO service_role;
-GRANT SELECT ON TABLE work.manual_link TO anon;
-GRANT SELECT,DELETE ON TABLE work.manual_link TO authenticated;
-
---
 -- Name: TABLE v_rav_review; Type: ACL; Schema: api; Owner: -
 --
 
@@ -3222,20 +3342,12 @@ GRANT SELECT ON TABLE api.report_undocumented_import TO anon;
 GRANT SELECT ON TABLE api.report_undocumented_import TO authenticated;
 
 --
--- Name: TABLE template_link; Type: ACL; Schema: derived; Owner: -
+-- Name: TABLE move_source; Type: ACL; Schema: derived; Owner: -
 --
 
-GRANT ALL ON TABLE derived.template_link TO service_role;
-GRANT SELECT ON TABLE derived.template_link TO anon;
-GRANT SELECT ON TABLE derived.template_link TO authenticated;
-
---
--- Name: TABLE page_event; Type: ACL; Schema: mirror; Owner: -
---
-
-GRANT ALL ON TABLE mirror.page_event TO service_role;
-GRANT SELECT ON TABLE mirror.page_event TO anon;
-GRANT SELECT ON TABLE mirror.page_event TO authenticated;
+GRANT ALL ON TABLE derived.move_source TO service_role;
+GRANT SELECT ON TABLE derived.move_source TO anon;
+GRANT SELECT ON TABLE derived.move_source TO authenticated;
 
 --
 -- Name: TABLE v_moves; Type: ACL; Schema: api; Owner: -

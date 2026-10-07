@@ -33,3 +33,9 @@ jobs:
           FLAGS: ${{ inputs.dry_run && '--dry-run' || '' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - name: אימות זהות למועמדי העברה
+        if: ${{ !inputs.dry_run }}
+        run: python -m collector.cli movecheck
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
