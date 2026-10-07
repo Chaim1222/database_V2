@@ -2,6 +2,7 @@
 import copy
 import gzip
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -229,6 +230,60 @@ class RunTests(unittest.TestCase):
             code = audit.run(out, env={"V1_DB_URL": "one", "V2_DB_URL": "two"}, read=lambda *_: database(), mw_factory=Mock())
             self.assertEqual(code, 2)
             self.assertEqual(json.loads((out / "report.json").read_text())["stage"], "source/wikipedia")
+
+
+@unittest.skipUnless(os.environ.get("AUDIT_TEST_DB_URL"), "requires disposable Postgres database")
+class PostgresReadTests(unittest.TestCase):
+    """Real driver/cursors/transactions, on a disposable CI database only."""
+    @classmethod
+    def setUpClass(cls):
+        import psycopg
+        cls.url = os.environ["AUDIT_TEST_DB_URL"]
+        with psycopg.connect(cls.url, autocommit=True) as conn:
+            # This fixture is deliberately minimal, and never a production DSN.
+            if conn.execute("SELECT current_database()").fetchone()[0] != "audit_reader_test":
+                raise RuntimeError("integration fixture requires audit_reader_test")
+            conn.execute("""
+                CREATE SCHEMA ops; CREATE SCHEMA mirror; CREATE SCHEMA api;
+                CREATE TABLE public.sync_watermarks (source text, last_synced_ts timestamptz);
+                INSERT INTO public.sync_watermarks VALUES ('wikipedia', now()-interval '1 hour'), ('mechalol', now()-interval '1 hour');
+                CREATE TABLE public.weekly_build_state (build_id text, phase text, updated_at timestamptz);
+                INSERT INTO public.weekly_build_state VALUES ('build', 'complete', now()-interval '2 hours');
+                CREATE TABLE public.wikipedia_pages (id bigint, title text);
+                INSERT INTO public.wikipedia_pages SELECT i, 'title-' || i FROM generate_series(1, 1100) i;
+                CREATE TABLE public.mechalol_pages (id bigint, title text, status text, source_type text, needs_attention boolean, is_dictionary_entry boolean);
+                INSERT INTO public.mechalol_pages VALUES (2, 'mech', 'מיובא ומתועד', 'wikipedia_documented', false, false);
+                CREATE TABLE ops.watermark (site text, stream text, ts timestamptz);
+                INSERT INTO ops.watermark SELECT source, 'delta', last_synced_ts FROM public.sync_watermarks;
+                CREATE TABLE ops.sync_run (kind text, status text, started_at timestamptz, finished_at timestamptz);
+                INSERT INTO ops.sync_run VALUES ('sync', 'succeeded', now()-interval '2 hours', now()-interval '1 hour');
+                CREATE TABLE mirror.wiki_page AS SELECT id AS page_id, title FROM public.wikipedia_pages;
+                CREATE TABLE mirror.mech_page AS SELECT id AS page_id, title, 'imported_documented'::text AS status, source_type, needs_attention, is_dictionary_entry AS is_dictionary FROM public.mechalol_pages;
+            """)
+            for schema in ("public", "api"):
+                conn.execute(f"CREATE VIEW {schema}.report_missing_from_mechalol AS SELECT 1::bigint AS id, 'title-1'::text AS title, false AS mechalol_redirect_exists")
+                conn.execute(f"CREATE VIEW {schema}.report_undocumented_import AS SELECT 2::bigint AS id, 'mech'::text AS title, 'missing_sort'::text AS source_type WHERE false")
+                conn.execute(f"CREATE VIEW {schema}.report_wikipedia_moves AS SELECT 2::bigint AS id, 'mech'::text AS title, 'old'::text AS old_title, 'new'::text AS wikipedia_title, 'title'::text AS via, 1::bigint AS wikipedia_id WHERE false")
+                conn.execute(f"CREATE VIEW {schema}.report_rev_tasks AS SELECT 2::bigint AS id, 'mech'::text AS title, 'bad_rev'::text AS rev_task, 1::bigint AS sort_template_rev, NULL::bigint AS rev_page_id, NULL::text AS rev_page_title WHERE false")
+
+    def connect(self, *args, **kwargs):
+        import psycopg
+        # Local disposable server need not expose TLS; all other production
+        # connection options, especially read-only, are used unchanged.
+        kwargs["sslmode"] = "prefer"
+        conn = psycopg.connect(*args, **kwargs)
+        self.assertEqual(conn.execute("SHOW default_transaction_read_only").fetchone()[0], "on")
+        with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
+            conn.execute("INSERT INTO public.wikipedia_pages VALUES (9999, 'forbidden')")
+        return conn
+
+    def test_real_driver_reads_both_contracts_without_rest_cap(self):
+        left = audit.read_database(self.url, "v1", connect=self.connect)
+        right = audit.read_database(self.url, "v2", connect=self.connect)
+        self.assertEqual(len(left["mirrors"]["wikipedia"]), 1100)
+        self.assertEqual(left["mirrors"], right["mirrors"])
+        self.assertEqual(left["reports"], right["reports"])
+        self.assertEqual(audit.build_report({"v1": left, "v2": right}, sources(left))["status"], "clean")
 
 
 if __name__ == "__main__":
