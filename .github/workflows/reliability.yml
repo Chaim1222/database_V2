@@ -1,0 +1,40 @@
+name: "בדיקת אמינות V1 ו־V2"
+# Manual read-only comparison. No sync, repair, migration, or database logging.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Avoid overlapping V2 collectors. V1 is captured in a read-only repeatable-read
+# transaction; preflight rejects unfinished weekly builds / observed writers.
+concurrency:
+  group: v2-db-write
+  cancel-in-progress: false
+
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt 'psycopg[binary]==3.2.10'
+      - name: השוואת המסדים לאותו צילום מקור
+        run: python -m collector.reliability --out-dir reliability_out
+        env:
+          V1_DB_URL: ${{ secrets.V1_DB_URL }}
+          V2_DB_URL: ${{ secrets.V2_DB_URL }}
+      - name: דוח וצילומי הבדיקה
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: v1-v2-reliability-${{ github.run_id }}
+          path: reliability_out/
+          if-no-files-found: error
+          retention-days: 30
