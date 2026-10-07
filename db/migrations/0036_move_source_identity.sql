@@ -56,8 +56,7 @@ where mirror.title_key(m.title) <> mirror.title_key(w.title)
 order by h.mech_id, (h.via = 'title') desc, h.ts desc, h.wiki_id, h.old_title;
 
 
-revoke all on api.move_candidates from public, anon, authenticated;
-grant select on api.move_candidates to service_role;
+revoke all on api.move_candidates from public;
 
 create or replace view api.v_moves with (security_invoker = true) as
 select h.* from api.move_candidates h
@@ -71,7 +70,7 @@ where not exists (
 );
 -- v_moves is security_invoker: its readers need candidate access; this is the same
 -- public candidate information as before, without suppression. The writer scope is private.
-grant select on api.move_candidates to anon, authenticated;
+grant select on api.move_candidates to anon, authenticated, service_role;
 
 create function api.move_source_scope(p_after bigint default 0, p_limit integer default 50)
 returns table (mech_id bigint, title text, local_rev_id bigint, template_rev bigint, template_title text)
