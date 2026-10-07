@@ -6,11 +6,12 @@ on:
 permissions:
   contents: read
 
-# Avoid overlapping V2 collectors. V1 is captured in a read-only repeatable-read
-# transaction; preflight rejects unfinished weekly builds / observed writers.
+# Do not occupy the writers' queue during the long source scan. Consistent DB
+# snapshots and unfinished-run guards remain; they do not lock either writer.
 concurrency:
-  group: v2-db-write
+  group: v2-reliability-audit
   cancel-in-progress: false
+  queue: max
 
 jobs:
   reliability:

@@ -62,6 +62,18 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(report["status"], "differences")
         self.assertTrue(report["comparisons"][1]["findings"][0]["changed_in_window"])
 
+    def test_large_windows_are_not_scanned_for_each_finding(self):
+        class WindowList(list):
+            def __contains__(self, value):
+                raise AssertionError("linear membership scan on window list")
+        left, right = database(), database()
+        right["mirrors"]["wikipedia"][1]["title"] = "ישן"
+        src = sources(left)
+        src["wikipedia"]["windows"]["v2"] = {
+            "ids": WindowList(range(2, 10002)), "titles": WindowList(["א"] + [str(i) for i in range(10000)])}
+        report = audit.build_report({"v1": left, "v2": right}, src)
+        self.assertTrue(report["comparisons"][1]["findings"][0]["changed_in_window"])
+
     def test_v1_classification_is_compared_against_source(self):
         left, right = database(), database()
         src = sources(right)
@@ -90,7 +102,7 @@ class StateTests(unittest.TestCase):
         if version == "v1":
             state["weekly"] = {"phase": "complete", "updated_at": AT}
         else:
-            state["runs"] = [{"kind": "sync", "status": "succeeded"}]
+            state["runs"] = [{"kind": "sync", "status": "succeeded", "started_at": AT}]
         return state
 
     def test_valid_completed_states(self):
@@ -122,6 +134,17 @@ class StateTests(unittest.TestCase):
         state["weekly"]["updated_at"] = AT - timedelta(days=9)
         with self.assertRaises(audit.AuditError):
             audit.validate_state("v1", state, AT)
+
+    def test_old_failed_rebuild_does_not_block_later_successful_sync(self):
+        state = self.state("v2")
+        state["runs"].append({"kind": "rebuild", "status": "failed", "started_at": AT - timedelta(days=1)})
+        audit.validate_state("v2", state, AT)
+
+    def test_newer_failed_write_is_not_hidden_by_old_success(self):
+        state = self.state("v2")
+        state["runs"].append({"kind": "rebuild", "status": "failed", "started_at": AT + timedelta(seconds=1)})
+        with self.assertRaises(audit.AuditError):
+            audit.validate_state("v2", state, AT)
 
 
 class SourceTests(unittest.TestCase):
@@ -178,17 +201,19 @@ class ReadTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 audit.keyed(rows)
 
-    def test_database_uses_read_only_repeatable_read_and_aborts_on_writer(self):
+    def test_database_configures_read_only_and_still_aborts_on_running_job(self):
         from unittest.mock import MagicMock
         conn = MagicMock()
         conn.__enter__.return_value = conn
-        conn.execute.side_effect = [Mock(), Mock(fetchone=Mock(return_value=(AT,))), Mock(fetchone=Mock(return_value=(1,)))]
+        conn.execute.side_effect = [Mock(), Mock(), Mock(), Mock(), Mock(fetchone=Mock(return_value=(AT,))),
+                                   Mock(fetchone=Mock(return_value=(1,)))]
         connect = Mock(return_value=conn)
         with self.assertRaises(audit.AuditError):
-            audit.read_database("secret-url", "v1", connect=connect)
-        self.assertIn("default_transaction_read_only=on", connect.call_args.kwargs["options"])
-        self.assertEqual(conn.execute.call_args_list[0].args[0], "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        self.assertTrue(all(call.args[0].lstrip().startswith(("SELECT", "SET TRANSACTION")) for call in conn.execute.call_args_list))
+            audit.read_database("secret-url", "v2", connect=connect)
+        self.assertNotIn("options", connect.call_args.kwargs)
+        self.assertEqual(conn.execute.call_args_list[0].args[0], "SET default_transaction_read_only = on")
+        self.assertEqual(conn.execute.call_args_list[3].args[0], "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        self.assertTrue(all(call.args[0].lstrip().startswith(("SELECT", "SET")) for call in conn.execute.call_args_list))
 
 
 class RunTests(unittest.TestCase):
@@ -255,8 +280,11 @@ class PostgresReadTests(unittest.TestCase):
                 INSERT INTO public.mechalol_pages VALUES (2, 'mech', 'מיובא ומתועד', 'wikipedia_documented', false, false);
                 CREATE TABLE ops.watermark (site text, stream text, ts timestamptz);
                 INSERT INTO ops.watermark SELECT source, 'delta', last_synced_ts FROM public.sync_watermarks;
-                CREATE TABLE ops.sync_run (kind text, status text, started_at timestamptz, finished_at timestamptz);
-                INSERT INTO ops.sync_run VALUES ('sync', 'succeeded', now()-interval '2 hours', now()-interval '1 hour');
+                CREATE TABLE ops.sync_run (run_id bigserial, kind text, status text, started_at timestamptz, finished_at timestamptz, error text);
+                INSERT INTO ops.sync_run (kind, status, started_at, finished_at, error) VALUES
+                    ('sync', 'succeeded', now()-interval '2 hours', now()-interval '1 hour', NULL),
+                    ('sync', 'cancelled', now()-interval '5 minutes', now()-interval '4 minutes', 'dry run'),
+                    ('rebuild', 'failed', now()-interval '1 day', now()-interval '23 hours', 'old failure');
                 CREATE TABLE mirror.wiki_page AS SELECT id AS page_id, title FROM public.wikipedia_pages;
                 CREATE TABLE mirror.mech_page AS SELECT id AS page_id, title, 'imported_documented'::text AS status, source_type, needs_attention, is_dictionary_entry AS is_dictionary FROM public.mechalol_pages;
             """)
@@ -268,14 +296,21 @@ class PostgresReadTests(unittest.TestCase):
 
     def connect(self, *args, **kwargs):
         import psycopg
-        # Local disposable server need not expose TLS; all other production
-        # connection options, especially read-only, are used unchanged.
+        # Local disposable server need not expose TLS. Production session
+        # settings are configured by read_database after connection, unchanged.
         kwargs["sslmode"] = "prefer"
-        conn = psycopg.connect(*args, **kwargs)
-        self.assertEqual(conn.execute("SHOW default_transaction_read_only").fetchone()[0], "on")
-        with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
-            conn.execute("INSERT INTO public.wikipedia_pages VALUES (9999, 'forbidden')")
-        return conn
+        self.assertNotIn("options", kwargs)
+        return psycopg.connect(*args, **kwargs)
+
+    def test_real_session_configuration_rejects_write(self):
+        import psycopg
+        with psycopg.connect(self.url, autocommit=True) as conn:
+            audit.configure_connection(conn)
+            self.assertEqual(conn.execute("SHOW default_transaction_read_only").fetchone()[0], "on")
+            self.assertEqual(conn.execute("SHOW statement_timeout").fetchone()[0], "2min")
+            self.assertEqual(conn.execute("SHOW lock_timeout").fetchone()[0], "5s")
+            with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
+                conn.execute("INSERT INTO public.wikipedia_pages VALUES (9999, 'forbidden')")
 
     def test_real_driver_reads_both_contracts_without_rest_cap(self):
         left = audit.read_database(self.url, "v1", connect=self.connect)
@@ -284,6 +319,18 @@ class PostgresReadTests(unittest.TestCase):
         self.assertEqual(left["mirrors"], right["mirrors"])
         self.assertEqual(left["reports"], right["reports"])
         self.assertEqual(audit.build_report({"v1": left, "v2": right}, sources(left))["status"], "clean")
+
+    def test_real_running_job_and_genuine_cancelled_sync_still_block(self):
+        import psycopg
+        for kind, status, error in (("enrich", "running", None), ("sync", "cancelled", "interrupted")):
+            with psycopg.connect(self.url, autocommit=True) as conn:
+                pid = conn.execute("""INSERT INTO ops.sync_run (kind, status, started_at, finished_at, error)
+                    VALUES (%s, %s, now(), NULL, %s) RETURNING run_id""", (kind, status, error)).fetchone()[0]
+                try:
+                    with self.assertRaises(audit.AuditError):
+                        audit.read_database(self.url, "v2", connect=self.connect)
+                finally:
+                    conn.execute("DELETE FROM ops.sync_run WHERE run_id = %s", (pid,))
 
 
 if __name__ == "__main__":

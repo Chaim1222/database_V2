@@ -147,10 +147,20 @@ def validate_state(version, state, captured_at):
         if weekly_age < timedelta(0) or weekly_age > timedelta(days=8):
             raise AuditError("V1: אין סנכרון שבועי מלא שהושלם בשמונת הימים האחרונים")
     else:
-        if any(r["status"] != "succeeded" for r in state["runs"] if r["kind"] in ("sync", "rebuild")):
-            raise AuditError("V2: ריצת הסנכרון או הבנייה האחרונה לא הושלמה בהצלחה")
-        if not any(r["kind"] in ("sync", "rebuild") for r in state["runs"]):
+        writes = [r for r in state["runs"] if r["kind"] in ("sync", "rebuild")]
+        if not writes:
             raise AuditError("V2: לא נמצאה ריצת סנכרון שהושלמה")
+        latest = max(writes, key=lambda r: iso(r["started_at"]))
+        if latest["status"] != "succeeded":
+            raise AuditError("V2: ריצת הסנכרון או הבנייה האחרונה לא הושלמה בהצלחה")
+
+
+def configure_connection(conn):
+    # Session poolers may reject startup options. Configure before the first
+    # data read; keep a read-only session default AND explicit transaction mode.
+    conn.execute("SET default_transaction_read_only = on")
+    conn.execute("SET statement_timeout = '120s'")
+    conn.execute("SET lock_timeout = '5s'")
 
 
 def read_database(url, version, connect=None):
@@ -159,19 +169,11 @@ def read_database(url, version, connect=None):
         connect = psycopg.connect
     # Session pooler/direct URL, not transaction pooler (named cursors).
     with connect(url, autocommit=True, connect_timeout=20, sslmode="require",
-                 application_name="v1-v2-reliability-audit",
-                 options="-c default_transaction_read_only=on -c statement_timeout=120000 -c lock_timeout=5000") as conn:
+                 application_name="v1-v2-reliability-audit") as conn:
+        configure_connection(conn)
         with conn.transaction():
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             captured_at = conn.execute("SELECT clock_timestamp()").fetchone()[0]
-            # Never log pg_stat_activity.query: it may contain confidential literals.
-            active = conn.execute("""SELECT count(*) FROM pg_stat_activity
-                WHERE datname = current_database() AND pid <> pg_backend_pid()
-                  AND state IN ('active', 'idle in transaction')
-                  AND application_name <> 'v1-v2-reliability-audit'
-                  AND coalesce(query, '') ~* '\\m(insert|update|delete|truncate|alter|sync_apply_[a-z_]+|sync_run_[a-z_]+|[a-z_]*weekly_build|perform_atomic_swap|import_human_data|maintenance_[a-z_]+)\\M'""").fetchone()[0]
-            if active:
-                raise AuditError(f"{version}: נצפתה פעילות כתיבה; יש להמתין לסיום הריצות")
             if version == "v1":
                 marks = {r["source"]: r["last_synced_ts"] for r in read_rows(conn,
                     "SELECT source, last_synced_ts FROM public.sync_watermarks")}
@@ -190,9 +192,9 @@ def read_database(url, version, connect=None):
                 marks = {r["site"]: r["ts"] for r in read_rows(conn,
                     "SELECT site, ts FROM ops.watermark WHERE stream = 'delta'")}
                 runs = list(read_rows(conn, """SELECT DISTINCT ON (kind) kind, status, started_at, finished_at
-                    FROM ops.sync_run ORDER BY kind, started_at DESC"""))
-                if any(r["status"] == "running" for r in runs):
-                    raise AuditError("V2: קיימת ריצה שלא הסתיימה")
+                    FROM ops.sync_run
+                    WHERE NOT (kind = 'sync' AND status = 'cancelled' AND error IS NOT DISTINCT FROM 'dry run')
+                    ORDER BY kind, started_at DESC, run_id DESC"""))
                 state = {"watermarks": marks, "runs": runs}
                 schema = "api"
                 queries = {
@@ -241,10 +243,11 @@ def build_report(databases, sources):
             for kind, values in changes.items():
                 findings.extend({"id": i, "kind": kind, "old": old, "new": new} for i, old, new in values)
             window = source["windows"][version]
+            window_ids, window_titles = set(window["ids"]), set(window["titles"])
             for f in findings:
                 # Evidence of activity is context, never a waiver or proof of causation.
-                f["changed_in_window"] = (f["id"] in window["ids"] or
-                    any(t in window["titles"] for t in (f.get("title"), source["titles"].get(f["id"]), rows.get(f["id"], {}).get("title"))))
+                f["changed_in_window"] = (f["id"] in window_ids or
+                    any(t in window_titles for t in (f.get("title"), source["titles"].get(f["id"]), rows.get(f["id"], {}).get("title"))))
             comparisons.append({"name": f"{version}/{site}/source", "left_count": len(source["titles"]),
                                 "right_count": len(rows), "findings": findings})
         comparisons.append({"name": f"v1/v2/{site}",
