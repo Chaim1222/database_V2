@@ -1,0 +1,36 @@
+name: "בירור ממצאי בדיקת האמינות"
+# Manual, read-only site queries. No database credentials or writer concurrency.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-verify-findings
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: התקנת תלויות
+        run: python -m pip install -r requirements.txt
+      - name: בירור הממצאים מול האתרים
+        run: python -m collector.verify_findings --out-dir findings_check
+      - name: שמירת הדוח להורדה
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings-check-${{ github.run_id }}
+          path: findings_check/findings_check.json
+          if-no-files-found: warn
+          retention-days: 7
