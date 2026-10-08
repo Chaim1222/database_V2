@@ -46,3 +46,12 @@ jobs:
         run: |
           PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
           git diff --exit-code db/schema.sql
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: לקוח בדיקת האמינות מול Postgres זמני
+        run: |
+          pip install -r requirements.txt 'psycopg[binary]==3.2.10'
+          createdb -h /var/run/postgresql audit_reader_test
+          AUDIT_TEST_DB_URL="postgresql:///audit_reader_test?host=/var/run/postgresql" python -m unittest discover -s tests -p test_reliability.py
+          dropdb -h /var/run/postgresql audit_reader_test
