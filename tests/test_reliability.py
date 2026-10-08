@@ -217,6 +217,37 @@ class ReadTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_safe_database_diagnostics(self):
+        cases = [
+            ("password authentication failed", "אימות"),
+            ("Tenant or user not found", "הפרויקט"),
+            ("canceling statement due to statement timeout", "שאילתת"),
+            ("lock timeout", "נעילה"),
+            ("could not translate host name", "שם שרת"),
+            ("Network is unreachable", "נתיב רשת"),
+            ("SSL error", "מוצפן"),
+            ("connection refused", "דחה"),
+            ("connection timeout expired", "המתנה"),
+            ("server closed the connection unexpectedly", "סגר"),
+            ("unknown failure", "שלא זוהה"),
+        ]
+        for message, expected in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as temp:
+                out = Path(temp)
+                exc = RuntimeError(message + " postgresql://private-user:private-password@private-host/db")
+                audit.run(out, env={"V1_DB_URL": "one", "V2_DB_URL": "two"}, read=Mock(side_effect=exc))
+                report = json.loads((out / "report.json").read_text())
+                self.assertIn(expected, report["reason"])
+                for filename in ("report.json", "report.md"):
+                    self.assertNotIn("private-", (out / filename).read_text())
+
+    def test_database_sqlstate_diagnostic(self):
+        for state, expected in (("28P01", "אימות"), ("57014", "שאילתת"), ("55P03", "נעילה")):
+            exc = RuntimeError("private-password")
+            exc.sqlstate = state
+            self.assertIn(expected, audit.database_error_reason(exc))
+            self.assertNotIn("private", audit.database_error_reason(exc))
+
     def test_missing_secrets_produces_failed_downloadable_report(self):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp)
