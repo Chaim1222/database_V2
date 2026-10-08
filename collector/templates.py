@@ -15,6 +15,8 @@ FETCH_BATCH = 50
 MAX_TITLE_BYTES = 255            # מגבלת כותרת ב-MediaWiki
 INVALID_TITLE_CHARS = set('[]{}|<>#')
 SEND_BATCH = 500
+# קשר בתבנית מוכיח קיום גם בערך מקומי; אינו משנה סיווג או היקף משימות גרסה.
+TEMPLATE_STATUSES = {"imported_documented", "imported_undocumented", "created_in_mech"}
 
 
 def _find_template_body(text, start):
