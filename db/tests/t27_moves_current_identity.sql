@@ -36,7 +36,7 @@ insert into mirror.page_event(site,kind,page_id,title,new_title,ts) values
     ('wikipedia','move',305,'טיוטה:ישן','טיוטה:חדש','2026-10-06');
 do $$
 begin
-    if (select array_agg(id order by id) from api.v_moves) is distinct from array[201,202,204,212,213,217]::bigint[] then
+    if (select array_agg(id order by id) from api.v_moves) is distinct from array[201,202,212,213,217]::bigint[] then
         raise exception 'moves scope changed: %', (select jsonb_agg(v) from api.v_moves v);
     end if;
     if (select wikipedia_title from api.v_moves where id=201) is distinct from 'שם נוכחי'
@@ -49,7 +49,7 @@ begin
        or (select wikipedia_title from api.v_moves where id=217) is distinct from 'טיוטה:חדש' then
         raise exception 'draft move disappeared or stale target used';
     end if;
-    if exists (select 1 from api.v_moves where id in (210,211,214,215,216)) then
+    if exists (select 1 from api.v_moves where id in (204,210,211,214,215,216)) then
         raise exception 'resolved identity or superseded/unknown draft event became a task';
     end if;
     -- חזרה למרחב הראשי: מצב המראה גובר על יעד הטיוטה ההיסטורי.
@@ -68,7 +68,7 @@ begin
     update mirror.mech_page set title='השם החדש ביותר' where page_id=201;
     if exists(select 1 from api.v_moves where id=201) then raise exception 'fixed title remains a task'; end if;
     set local role anon;
-    if (select count(*) from api.report_wikipedia_moves) <> 4 then raise exception 'anon report'; end if;
+    if (select count(*) from api.report_wikipedia_moves) <> 3 then raise exception 'anon report'; end if;
     reset role;
     set local role authenticated;
     perform count(*) from api.v_moves;

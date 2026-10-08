@@ -150,6 +150,25 @@ class SyncTemplatesTests(unittest.TestCase):
         self.assertIn("templates", stats["mechalol"])
 
 
+    def test_created_page_link_is_checked_without_changing_classification(self):
+        from collector.sync import sync_site
+        class Mech(FakeMw):
+            def get(self, params):
+                return {"query": {"pages": [{"pageid": 2, "revisions": [{"revid": 20,
+                    "slots": {"main": {"content": "{{מיון ויקיפדיה|דף=ערבות (משפט עברי)|גרסה=0}}"}}}]}]}}
+        class Wiki:
+            def get(self, params):
+                return {"query": {"pages": [{"title": "ערבות (משפט עברי)", "pageid": 840992, "ns": 0}]}}
+        mech = Mech({2}, set(), [], [page(2, "ערבות (הלכה)")], [], {2: {CAT_CREATED}})
+        rpc = FakeRpc({})
+        sync_site("mechalol", mech, rpc, "r1", "start", "end", wiki_mw=Wiki())
+        applied = next(p for fn, p in rpc.calls if fn == "sync_apply_mech_pages")
+        self.assertEqual(applied["p_live"][0]["status"], "created_in_mech")
+        checks = next(p for fn, p in rpc.calls if fn == "sync_apply_template_checks")
+        self.assertEqual(checks["p_rows"][0]["wiki_id"], 840992)
+        self.assertEqual(checks["p_rows"][0]["outcome"], "ok")
+
+
 class SyncFlowTests(unittest.TestCase):
     def setUp(self):
         from datetime import datetime, timezone
@@ -157,9 +176,13 @@ class SyncFlowTests(unittest.TestCase):
         self.marks = {"wikipedia/delta": "2026-10-05T10:00:00Z", "mechalol/delta": "2026-10-05T10:00:00Z"}
 
     def mws(self):
+        class Mech(FakeMw):
+            def get(self, params):
+                return {"query": {"pages": [{"pageid": 2, "revisions": [{"revid": 20,
+                    "slots": {"main": {"content": "אין תבנית"}}}]}]}}
         return {
             "wikipedia": FakeMw({1}, {"א"}, [], [page(1, "א")], [page(1, "א")]),
-            "mechalol": FakeMw({2}, {"ב"}, [{"kind": "move", "page_id": 2, "title": "ב", "new_title": "ג", "ts": "t"}],
+            "mechalol": Mech({2}, {"ב"}, [{"kind": "move", "page_id": 2, "title": "ב", "new_title": "ג", "ts": "t"}],
                                [page(2, "ג")], [{"title": "ב", "ns": 0, "redirect": True, "pageid": 8}], {2: {CAT_CREATED}}),
         }
 

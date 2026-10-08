@@ -902,13 +902,13 @@ CREATE FUNCTION api.template_pending(p_after bigint DEFAULT 0, p_limit integer D
     AS $$
     select x.page_id, x.title from (
         (select m.page_id, m.title from mirror.mech_page m
-          where m.page_id > p_after and m.status in ('imported_documented', 'imported_undocumented')
+          where m.page_id > p_after and m.status in ('imported_documented', 'imported_undocumented', 'created_in_mech')
             and not exists (select 1 from derived.template_check c where c.mech_id = m.page_id)
           order by m.page_id limit p_limit)
         union all
         (select m.page_id, m.title from derived.template_check c join mirror.mech_page m on m.page_id = c.mech_id
           where c.outcome in ('unresolved', 'denied') and c.checked_at < now() - interval '7 days'
-            and m.page_id > p_after and m.status in ('imported_documented', 'imported_undocumented')
+            and m.page_id > p_after and m.status in ('imported_documented', 'imported_undocumented', 'created_in_mech')
           order by m.page_id limit p_limit)
     ) x order by x.page_id limit p_limit;
 $$;
@@ -1593,7 +1593,13 @@ CREATE VIEW api.v_moves WITH (security_invoker='true') AS
                    FROM derived.template_link t
                   WHERE ((t.mech_id = m_1.page_id) AND (t.wiki_id IS NOT NULL) AND (t.wiki_id <> lm.page_id))))) AND (NOT (EXISTS ( SELECT 1
                    FROM work.manual_link x
-                  WHERE ((x.mech_id = m_1.page_id) AND (x.wiki_id <> lm.page_id))))))
+                  WHERE ((x.mech_id = m_1.page_id) AND (x.wiki_id <> lm.page_id))))) AND (NOT ((EXISTS ( SELECT 1
+                   FROM mirror.wiki_page live
+                  WHERE ((mirror.title_key(live.title) = mirror.title_key(m_1.title)) AND (live.page_id <> lm.page_id)))) AND (NOT (EXISTS ( SELECT 1
+                   FROM derived.template_link t
+                  WHERE ((t.mech_id = m_1.page_id) AND (t.wiki_id = lm.page_id))))) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.manual_link x
+                  WHERE ((x.mech_id = m_1.page_id) AND (x.wiki_id = lm.page_id))))))))
         UNION ALL
          SELECT m_1.page_id,
             lm.page_id,
