@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .classify import classify
 from .normalize import mech_key_row
 from .state import chunks, resolve
-from .templates import check_and_apply
+from .templates import TEMPLATE_STATUSES, check_and_apply
 
 OVERLAP = timedelta(minutes=10)
 # מנה אחת = קריאה אטומית אחת. פיצול למנות מוותר על האטומיות (והחלפות כותרות בין מנות נראות כמיושנות),
@@ -56,8 +56,8 @@ def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None, dry_run=False):
         rpc.call("sync_record_events", {"p_events": [{"site": site, **e} for e in events], "p_run": run_id})
     totals["events"] = len(events)
     if site == "mechalol" and wiki_mw is not None:
-        # המסלול הממוקד של אימות תבניות: ערכי מכלול מיובאים שנערכו או נוצרו בחלון (הכשל מפיל את הריצה, והחלון יישאל שוב)
-        imported = {d["page_id"]: d["title"] for d in live if d.get("status") in ("imported_documented", "imported_undocumented")}
+        # המסלול הממוקד של אימות תבניות: ערכי מכלול עם סיווג מתאים, כולל נוצרו במכלול, שנערכו או נוצרו בחלון (הכשל מפיל את הריצה, והחלון יישאל שוב)
+        imported = {d["page_id"]: d["title"] for d in live if d.get("status") in TEMPLATE_STATUSES}
         if imported:
             totals["templates"] = check_and_apply(mw, wiki_mw, rpc, imported, list(imported))
     return totals
