@@ -87,4 +87,4 @@ $$;
 revoke all on function api.mark_feedback(bigint, text, text, text[], text, text, text, text, text, text, text) from public;
 grant execute on function api.mark_feedback(bigint, text, text, text[], text, text, text, text, text, text, text) to authenticated;
 
-insert into ops.schema_migration (version) values ('0037') on conflict do nothing;
+insert into ops.schema_migration (version) values ('0038') on conflict do nothing;

@@ -1,4 +1,7 @@
 begin;
+do $$ begin
+    if not exists (select 1 from ops.schema_migration where version='0038') then raise exception 'dashboard migration 0038 not registered'; end if;
+end $$;
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000a1'), ('00000000-0000-0000-0000-0000000000b2');
 insert into work.admin (user_id) values ('00000000-0000-0000-0000-0000000000a1');
 do $$ begin
@@ -14,6 +17,8 @@ end $$;
 set local role anon;
 do $$ begin
     if (select mechalol_redirect_exists from api.report_missing_from_mechalol where id=2) is not null then raise exception 'unchecked redirect must remain unknown'; end if;
+    if not exists (select 1 from api.v_missing where id=2 and mech_redirect=false) then raise exception 'standalone dashboard lost unchecked page'; end if;
+    if not exists (select 1 from api.report_missing_word_filter where id=2 and mechalol_redirect_exists is not true) then raise exception 'shared dashboard lost unchecked page'; end if;
     if (select counts from api.report_missing_word_filter where id=1) is distinct from '{"a":{"problem":0}}'::jsonb then raise exception 'row counts missing'; end if;
     if (select images from api.report_missing_word_filter where id=1) is not null then raise exception 'row images must stay lazy'; end if;
     if (select images from api.word_filter_results where wikipedia_id=1) is distinct from '["x.jpg"]'::jsonb then raise exception 'detail images'; end if;
@@ -80,4 +85,4 @@ do $$ begin
     if exists (select 1 from api.report_missing_word_filter_summary) then raise exception 'locked-create page counted'; end if;
 end $$;
 rollback;
-select 'ok t31_shared_dashboard' as test;
+select 'ok t32_shared_dashboard' as test;
