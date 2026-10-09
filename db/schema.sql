@@ -251,20 +251,22 @@ end;
 $$;
 
 --
--- Name: mark_feedback(bigint, text, text, text[], text, text, text, text, text); Type: FUNCTION; Schema: api; Owner: -
+-- Name: mark_feedback(bigint, text, text, text[], text, text, text, text, text, text, text); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text DEFAULT NULL::text, p_hidden text DEFAULT NULL::text, p_level text DEFAULT NULL::text, p_lists_version text DEFAULT NULL::text) RETURNS void
+CREATE FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text DEFAULT NULL::text, p_hidden text DEFAULT NULL::text, p_level text DEFAULT NULL::text, p_lists_version text DEFAULT NULL::text, p_before text DEFAULT NULL::text, p_after text DEFAULT NULL::text) RETURNS void
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
     AS $$
 begin
-    if not api.is_admin() then
-        raise exception 'not allowed' using errcode = '42501';
-    end if;
-    insert into work.scan_feedback (wiki_id, match_key, word, entries, label, topic, hidden, level, lists_version, user_id)
-    values (p_wiki_id, p_match_key, p_word, p_entries, p_label, p_topic, p_hidden, p_level, p_lists_version, auth.uid())
-    on conflict (wiki_id, match_key, user_id) do update set label = excluded.label, created_at = now();
+    if not api.is_admin() then raise exception 'not allowed' using errcode = '42501'; end if;
+    insert into work.scan_feedback as f
+        (wiki_id, match_key, word, entries, label, topic, hidden, level, lists_version, context_before, context_after, user_id)
+    values (p_wiki_id, p_match_key, p_word, p_entries, p_label, p_topic, p_hidden, p_level, p_lists_version, p_before, p_after, auth.uid())
+    on conflict (wiki_id, match_key, user_id) do update
+        set label = excluded.label, created_at = now(),
+            context_before = coalesce(excluded.context_before, f.context_before),
+            context_after = coalesce(excluded.context_after, f.context_after);
 end;
 $$;
 
@@ -1242,9 +1244,16 @@ CREATE VIEW api.report_locked_pages WITH (security_invoker='true') AS
             ELSE 'נעול לקריאה'::text
         END AS lock_level,
     detected_by AS lock_source,
-    NULL::bigint AS wikipedia_id,
-    page_id AS mechalol_id,
-    detected_at
+        CASE
+            WHEN (site = 'wikipedia'::text) THEN NULLIF(page_id, 0)
+            ELSE NULL::bigint
+        END AS wikipedia_id,
+        CASE
+            WHEN (site = 'mechalol'::text) THEN NULLIF(page_id, 0)
+            ELSE NULL::bigint
+        END AS mechalol_id,
+    detected_at,
+    site
    FROM api.v_locks l;
 
 --
@@ -1320,7 +1329,7 @@ CREATE VIEW api.report_missing_from_mechalol WITH (security_invoker='true') AS
     s.has_images AS easy_import_has_images,
     NULL::boolean AS problematic_words_clean,
     e.wiki_created_at AS created_at,
-    COALESCE(e.mech_redirect, false) AS mechalol_redirect_exists,
+    e.mech_redirect AS mechalol_redirect_exists,
     (e.length_checked_at IS NOT NULL) AS easy_import_checked,
     (e.created_checked_at IS NOT NULL) AS created_at_checked
    FROM (((derived.wiki_gap g
@@ -1330,6 +1339,37 @@ CREATE VIEW api.report_missing_from_mechalol WITH (security_invoker='true') AS
   WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
            FROM work.exclusion x
           WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND ((x.wiki_id = w.page_id) OR (x.title = w.title)))))));
+
+--
+-- Name: content_scan_detail; Type: TABLE; Schema: enrich; Owner: -
+--
+
+CREATE TABLE enrich.content_scan_detail (
+    wiki_id bigint NOT NULL,
+    counts jsonb,
+    matches jsonb,
+    images jsonb
+);
+
+--
+-- Name: word_filter_results; Type: VIEW; Schema: api; Owner: -
+--
+
+CREATE VIEW api.word_filter_results AS
+ SELECT s.wiki_id AS wikipedia_id,
+    d.matches,
+    s.matches_total,
+    d.images,
+    s.photo_count,
+    s.scanned_at,
+    s.rev_id,
+    s.lists_version,
+    d.counts
+   FROM (enrich.content_scan s
+     LEFT JOIN enrich.content_scan_detail d ON ((d.wiki_id = s.wiki_id)))
+  WHERE (EXISTS ( SELECT 1
+           FROM derived.wiki_gap g
+          WHERE ((g.wiki_id = s.wiki_id) AND (g.kind = 'missing'::text))));
 
 --
 -- Name: report_missing_word_filter; Type: VIEW; Schema: api; Owner: -
@@ -1347,7 +1387,7 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
     s.verdict_list_s AS verdict_suggested,
     s.has_images,
     s.photo_count,
-    NULL::jsonb AS counts,
+    d.counts,
     s.matches_total,
     NULL::jsonb AS images,
     s.scanned_at,
@@ -1367,9 +1407,72 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
             WHEN (s.rev_id IS DISTINCT FROM w.latest_rev_id) THEN 'stale'::text
             ELSE 'scanned'::text
         END AS scan_state
-   FROM ((api.report_missing_from_mechalol m
+   FROM (((api.report_missing_from_mechalol m
      JOIN mirror.wiki_page w ON ((w.page_id = m.id)))
-     LEFT JOIN enrich.content_scan s ON ((s.wiki_id = m.id)));
+     LEFT JOIN enrich.content_scan s ON ((s.wiki_id = m.id)))
+     LEFT JOIN api.word_filter_results d ON ((d.wikipedia_id = m.id)));
+
+--
+-- Name: report_missing_word_filter_summary; Type: VIEW; Schema: api; Owner: -
+--
+
+CREATE VIEW api.report_missing_word_filter_summary WITH (security_invoker='true') AS
+ SELECT COALESCE(mechalol_redirect_exists, false) AS redirect,
+    has_images,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN verdict
+            ELSE NULL::text
+        END AS verdict,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN verdict_suggested
+            ELSE NULL::text
+        END AS verdict_suggested,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict
+            ELSE NULL::text
+        END AS ctx_verdict,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion
+            ELSE NULL::text
+        END AS ctx_suspicion,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict_suggested
+            ELSE NULL::text
+        END AS ctx_verdict_suggested,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion_suggested
+            ELSE NULL::text
+        END AS ctx_suspicion_suggested,
+    (dictionary IS NOT NULL) AS dictionary,
+    topic,
+    (count(*))::integer AS n,
+    scan_state
+   FROM api.report_missing_word_filter
+  GROUP BY COALESCE(mechalol_redirect_exists, false), has_images,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN verdict
+            ELSE NULL::text
+        END,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN verdict_suggested
+            ELSE NULL::text
+        END,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict
+            ELSE NULL::text
+        END,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion
+            ELSE NULL::text
+        END,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict_suggested
+            ELSE NULL::text
+        END,
+        CASE
+            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion_suggested
+            ELSE NULL::text
+        END, (dictionary IS NOT NULL), topic, scan_state;
 
 --
 -- Name: manual_link; Type: TABLE; Schema: work; Owner: -
@@ -1481,7 +1584,7 @@ CREATE VIEW api.report_rev_tasks WITH (security_invoker='true') AS
     rev_task,
     rev_id AS sort_template_rev,
     NULL::date AS sort_template_date,
-    NULL::bigint AS wikipedia_id,
+    linked_wiki_id AS wikipedia_id,
     linked_title,
     rev_page_id,
     rev_page_title,
@@ -1841,36 +1944,6 @@ CREATE VIEW api.word_filter_feedback AS
     user_id
    FROM work.scan_feedback f
   WHERE (user_id = auth.uid());
-
---
--- Name: content_scan_detail; Type: TABLE; Schema: enrich; Owner: -
---
-
-CREATE TABLE enrich.content_scan_detail (
-    wiki_id bigint NOT NULL,
-    counts jsonb,
-    matches jsonb,
-    images jsonb
-);
-
---
--- Name: word_filter_results; Type: VIEW; Schema: api; Owner: -
---
-
-CREATE VIEW api.word_filter_results AS
- SELECT s.wiki_id AS wikipedia_id,
-    d.matches,
-    s.matches_total,
-    d.images,
-    s.photo_count,
-    s.scanned_at,
-    s.rev_id,
-    s.lists_version
-   FROM (enrich.content_scan s
-     LEFT JOIN enrich.content_scan_detail d ON ((d.wiki_id = s.wiki_id)))
-  WHERE (EXISTS ( SELECT 1
-           FROM derived.wiki_gap g
-          WHERE ((g.wiki_id = s.wiki_id) AND (g.kind = 'missing'::text))));
 
 --
 -- Name: mech_key; Type: TABLE; Schema: derived; Owner: -
@@ -2835,12 +2908,12 @@ REVOKE ALL ON FUNCTION api.maintenance_refresh_gap(p_after bigint, p_limit integ
 GRANT ALL ON FUNCTION api.maintenance_refresh_gap(p_after bigint, p_limit integer) TO service_role;
 
 --
--- Name: FUNCTION mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text); Type: ACL; Schema: api; Owner: -
+-- Name: FUNCTION mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text, p_before text, p_after text); Type: ACL; Schema: api; Owner: -
 --
 
-REVOKE ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text) FROM PUBLIC;
-GRANT ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text) TO service_role;
-GRANT ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text) TO authenticated;
+REVOKE ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text, p_before text, p_after text) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text, p_before text, p_after text) TO service_role;
+GRANT ALL ON FUNCTION api.mark_feedback(p_wiki_id bigint, p_match_key text, p_word text, p_entries text[], p_label text, p_topic text, p_hidden text, p_level text, p_lists_version text, p_before text, p_after text) TO authenticated;
 
 --
 -- Name: FUNCTION match_conflicts(); Type: ACL; Schema: api; Owner: -
@@ -3140,12 +3213,34 @@ GRANT SELECT ON TABLE api.report_missing_from_mechalol TO anon;
 GRANT SELECT ON TABLE api.report_missing_from_mechalol TO authenticated;
 
 --
+-- Name: TABLE content_scan_detail; Type: ACL; Schema: enrich; Owner: -
+--
+
+GRANT ALL ON TABLE enrich.content_scan_detail TO service_role;
+
+--
+-- Name: TABLE word_filter_results; Type: ACL; Schema: api; Owner: -
+--
+
+GRANT ALL ON TABLE api.word_filter_results TO service_role;
+GRANT SELECT ON TABLE api.word_filter_results TO anon;
+GRANT SELECT ON TABLE api.word_filter_results TO authenticated;
+
+--
 -- Name: TABLE report_missing_word_filter; Type: ACL; Schema: api; Owner: -
 --
 
 GRANT ALL ON TABLE api.report_missing_word_filter TO service_role;
 GRANT SELECT ON TABLE api.report_missing_word_filter TO anon;
 GRANT SELECT ON TABLE api.report_missing_word_filter TO authenticated;
+
+--
+-- Name: TABLE report_missing_word_filter_summary; Type: ACL; Schema: api; Owner: -
+--
+
+GRANT ALL ON TABLE api.report_missing_word_filter_summary TO service_role;
+GRANT SELECT ON TABLE api.report_missing_word_filter_summary TO anon;
+GRANT SELECT ON TABLE api.report_missing_word_filter_summary TO authenticated;
 
 --
 -- Name: TABLE manual_link; Type: ACL; Schema: work; Owner: -
@@ -3359,20 +3454,6 @@ GRANT ALL ON TABLE work.scan_feedback TO service_role;
 
 GRANT ALL ON TABLE api.word_filter_feedback TO service_role;
 GRANT SELECT ON TABLE api.word_filter_feedback TO authenticated;
-
---
--- Name: TABLE content_scan_detail; Type: ACL; Schema: enrich; Owner: -
---
-
-GRANT ALL ON TABLE enrich.content_scan_detail TO service_role;
-
---
--- Name: TABLE word_filter_results; Type: ACL; Schema: api; Owner: -
---
-
-GRANT ALL ON TABLE api.word_filter_results TO service_role;
-GRANT SELECT ON TABLE api.word_filter_results TO anon;
-GRANT SELECT ON TABLE api.word_filter_results TO authenticated;
 
 --
 -- Name: TABLE mech_key; Type: ACL; Schema: derived; Owner: -
