@@ -336,20 +336,36 @@ $$;
 --
 
 CREATE FUNCTION api.rev_scope(p_after bigint DEFAULT 0, p_limit integer DEFAULT 2000) RETURNS TABLE(mech_id bigint, title text, template_rev bigint, template_title text, linked_wiki_id bigint)
-    LANGUAGE sql STABLE
+    LANGUAGE plpgsql STABLE
     SET search_path TO ''
+    SET plan_cache_mode TO 'force_custom_plan'
     AS $$
-    select m.page_id, m.title, c.template_rev, c.template_title,
-           coalesce(l.wiki_id, (select w.page_id from mirror.wiki_page w where mirror.title_key(w.title) = mirror.title_key(m.title) limit 1))
-    from mirror.mech_page m
-    join derived.template_check c on c.mech_id = m.page_id
-    left join derived.template_link l on l.mech_id = m.page_id
-    where m.page_id > p_after
-      and m.status = 'imported_documented' and not m.is_dictionary and not m.needs_attention
-      and c.outcome <> 'denied'
-      and not exists (select 1 from work.manual_link x where x.mech_id = m.page_id)
-    order by m.page_id
-    limit p_limit;
+BEGIN
+    RETURN QUERY
+    SELECT m.page_id, m.title, c.template_rev, c.template_title,
+           coalesce(l.wiki_id, (
+               SELECT w.page_id
+               FROM mirror.wiki_page w
+               WHERE mirror.title_key(w.title) = mirror.title_key(m.title)
+               LIMIT 1
+           ))
+    FROM mirror.mech_page m
+    JOIN derived.template_check c
+      ON c.mech_id = m.page_id AND c.mech_id > p_after
+    LEFT JOIN derived.template_link l
+      ON l.mech_id = m.page_id AND l.mech_id > p_after
+    WHERE m.page_id > p_after
+      AND m.status = 'imported_documented'
+      AND NOT m.is_dictionary
+      AND NOT m.needs_attention
+      AND c.outcome <> 'denied'
+      AND NOT EXISTS (
+          SELECT 1 FROM work.manual_link x
+          WHERE x.mech_id = m.page_id
+      )
+    ORDER BY m.page_id
+    LIMIT p_limit;
+END;
 $$;
 
 --

@@ -84,5 +84,16 @@ do $$ begin
     if exists (select 1 from api.report_missing_from_mechalol where id=3) then raise exception 'locked-create page visible'; end if;
     if exists (select 1 from api.report_missing_word_filter_summary) then raise exception 'locked-create page counted'; end if;
 end $$;
+-- Title-only create locks come from exclusions, not page_lock: both rows have id=0.
+insert into work.exclusion (kind,title) values ('locked_create','נעילה ללא מזהה א'), ('locked_create','נעילה ללא מזהה ב');
+set local role anon;
+do $$ begin
+    if (select count(*) from api.report_locked_pages
+        where title in ('נעילה ללא מזהה א','נעילה ללא מזהה ב')
+          and site='mechalol' and id=0 and mechalol_id is null and wikipedia_id is null
+          and lock_level='נעול ליצירה' and lock_source='exclusion') is distinct from 2
+    then raise exception 'title-only locks must preserve both titles and id=0 with null site identifiers'; end if;
+end $$;
+reset role;
 rollback;
 select 'ok t32_shared_dashboard' as test;
