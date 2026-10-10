@@ -36,6 +36,33 @@ class AuditError(RuntimeError):
     """A deliberately safe, user-readable diagnostic (never a network exception)."""
 
 
+def database_error_reason(exc):
+    """Classify locally; return fixed text only, never exception/DSN fragments."""
+    state = getattr(exc, "sqlstate", None)
+    message = str(exc).lower()
+    if state in ("28P01", "28000") or "password authentication failed" in message or "wrong password" in message:
+        return "אימות החיבור נכשל: יש לבדוק את שם המשתמש וסיסמת המסד בסוד החיבור."
+    if "tenant or user not found" in message:
+        return "מאגד החיבורים לא מצא את הפרויקט או המשתמש: יש לבדוק שרת ושם משתמש של Session pooler."
+    if state == "57014" or "statement timeout" in message:
+        return "שאילתת המסד חרגה מזמן הביצוע המותר."
+    if state == "55P03" or "lock timeout" in message:
+        return "קריאת המסד נחסמה בנעילה וחרגה מזמן ההמתנה המותר."
+    if "could not translate host name" in message or "name or service not known" in message or "nodename nor servname" in message:
+        return "לא ניתן לפתור את שם שרת המסד: יש לבדוק את כתובת השרת."
+    if "network is unreachable" in message or "no route to host" in message:
+        return "אין נתיב רשת לשרת המסד: יש להשתמש ב-Session pooler הנגיש ל-IPv4."
+    if "ssl" in message or "certificate" in message or "tls" in message:
+        return "החיבור המוצפן למסד נכשל (SSL/TLS)."
+    if "connection refused" in message:
+        return "שרת המסד דחה את החיבור: יש לבדוק שרת, פורט וזמינות."
+    if "timeout" in message or "timed out" in message:
+        return "פג זמן ההמתנה לחיבור או לתקשורת עם המסד."
+    if "server closed the connection" in message or "connection reset" in message:
+        return "השרת סגר את החיבור למסד."
+    return "כשל מסד שלא זוהה באבחון הבטוח; לא הוצגו פרטי חיבור."
+
+
 def iso(value):
     if isinstance(value, str):
         value = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -345,6 +372,8 @@ def run(out, env=os.environ, read=read_database, mw_factory=AuditMediaWiki):
         report.update(status="failed", stage=stage, error=type(exc).__name__)
         if isinstance(exc, AuditError):
             report["reason"] = str(exc)
+        elif stage.startswith("database/"):
+            report["reason"] = database_error_reason(exc)
     finally:
         report["finished_at"] = iso(now())
         out.mkdir(parents=True, exist_ok=True)
