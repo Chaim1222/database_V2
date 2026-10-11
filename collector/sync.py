@@ -3,6 +3,7 @@
 נקודת ההתקדמות מתקדמת רק בסיום מוצלח של כל הריצה (api.sync_run_finish).
 """
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 
 from .classify import classify
 from .normalize import mech_key_row
@@ -47,9 +48,14 @@ def sync_site(site, mw, rpc, run_id, since, until, wiki_mw=None, dry_run=False):
         return {**totals, "dry_run": True}
     parts = list(chunks(live, APPLY_CHUNK)) or [[]]
     for n, part in enumerate(parts):
+        started_at = monotonic()
+        print(f"sync apply {site} batch={n + 1}/{len(parts)} live={len(part)} "
+              f"gone_ids={len(gone_ids) if n == 0 else 0} "
+              f"gone_titles={len(gone_titles) if n == 0 else 0}", flush=True)
         result = rpc.call(APPLY_FN[site], {"p_live": part,
                                            "p_gone_ids": gone_ids if n == 0 else [],
                                            "p_gone_titles": gone_titles if n == 0 else []})
+        print(f"sync apply {site} completed seconds={monotonic() - started_at:.3f}", flush=True)
         for key, value in (result or {}).items():
             totals[key] = totals.get(key, 0) + value
     if events:
