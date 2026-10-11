@@ -766,7 +766,8 @@ declare
     v_inserted integer;
     v_updated integer;
     v_ids bigint[];
-    v_gap integer;
+    v_gap integer := 0;
+    v_gap_ids bigint[];
 begin
     if exists (select 1 from jsonb_to_recordset(p_live) as l(page_id bigint) group by page_id having count(*) > 1)
        or exists (select 1 from jsonb_to_recordset(p_live) as l(title text) group by title having count(*) > 1) then
@@ -774,6 +775,24 @@ begin
     end if;
 
     select coalesce(array_agg(page_id), '{}') into v_ids from jsonb_to_recordset(p_live) as l(page_id bigint);
+
+    -- Revision-only edits cannot change title/link-based gap membership.
+    -- Capture the affected identities before renames/upserts; the whole call stays atomic.
+    select coalesce(array_agg(affected.page_id), '{}') into v_gap_ids
+    from (
+        select l.page_id
+        from jsonb_to_recordset(p_live) as l(page_id bigint, title text)
+        left join mirror.wiki_page w on w.page_id = l.page_id
+        where w.page_id is null or w.title is distinct from l.title
+        union
+        -- Keep identities before title-based deletion/collision removes the mirror row.
+        select w.page_id from mirror.wiki_page w
+        where w.title = any(p_gone_titles) and not (w.page_id = any(v_ids))
+        union
+        select w.page_id from mirror.wiki_page w
+        join jsonb_to_recordset(p_live) as l(page_id bigint, title text) on l.title = w.title
+        where l.page_id <> w.page_id and not (w.page_id = any(v_ids))
+    ) affected;
 
     -- מזהים שנעלמו (אלא אם הם גם חיים בקלט: אז המצב החי גובר)
     delete from mirror.wiki_page w
@@ -809,7 +828,9 @@ begin
     )
     select count(*) filter (where inserted), count(*) filter (where not inserted) into v_inserted, v_updated from up;
 
-    v_gap := derived.refresh_wiki_gap(v_ids || p_gone_ids);
+    if cardinality(v_gap_ids || p_gone_ids) > 0 then
+        v_gap := derived.refresh_wiki_gap(v_gap_ids || p_gone_ids);
+    end if;
     return jsonb_build_object('live', cardinality(v_ids), 'inserted', v_inserted, 'updated', v_updated,
                               'deleted', v_deleted, 'gap_changed', v_gap);
 end;
