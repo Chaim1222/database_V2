@@ -160,3 +160,53 @@ class MigrationReadTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls.count('-c'), 2)
         self.assertNotIn('-f ', calls)
+
+class MaxlagRetryTests(unittest.TestCase):
+    def response(self, code=200, body=None, retry=None):
+        import requests
+        response = requests.Response()
+        response.status_code = code
+        response.headers = {} if retry is None else {'Retry-After': retry}
+        response.json = lambda: body if body is not None else {'query': {}}
+        return response
+
+    def run_recovery(self, first, use_post=False):
+        from collector.mw import MediaWiki
+        from unittest.mock import Mock
+        session, waits = Mock(headers={}), []
+        method = session.post if use_post else session.get
+        method.side_effect = [first, self.response()]
+        mw = MediaWiki('https://fixture.invalid/api.php', session=session, sleep=waits.append)
+        result = mw.get({'titles': 'a' * 700} if use_post else {'action': 'query'})
+        self.assertEqual(result, {'query': {}})
+        self.assertEqual(method.call_count, 2)
+        return waits
+
+    def test_http_200_maxlag_honors_retry_after_on_get_and_post(self):
+        for use_post in (False, True):
+            with self.subTest(post=use_post):
+                self.assertEqual(self.run_recovery(self.response(body={'error': {'code': 'maxlag'}}, retry='17'), use_post), [17])
+
+    def test_missing_or_invalid_lag_header_waits_at_least_five_seconds(self):
+        for header in (None, 'invalid', '-1', '1'):
+            with self.subTest(header=header):
+                self.assertEqual(self.run_recovery(self.response(body={'error': {'code': 'maxlag'}}, retry=header)), [5])
+
+    def test_server_wait_is_not_shortened_to_previous_120_second_cap(self):
+        self.assertEqual(self.run_recovery(self.response(body={'error': {'code': 'maxlag'}}, retry='180')), [180])
+
+    def test_http_throttling_still_honors_header(self):
+        for code in (429, 503):
+            with self.subTest(code=code):
+                self.assertEqual(self.run_recovery(self.response(code=code, retry='17')), [17])
+
+    def test_persistent_lag_is_bounded_and_does_not_sleep_after_last_attempt(self):
+        import requests
+        from collector.mw import MediaWiki
+        from unittest.mock import Mock
+        waits, session = [], Mock(headers={})
+        session.get.return_value = self.response(body={'error': {'code': 'maxlag'}})
+        with self.assertRaises(requests.RequestException):
+            MediaWiki('https://fixture.invalid/api.php', session=session, sleep=waits.append).get({})
+        self.assertEqual(session.get.call_count, 8)
+        self.assertEqual(waits, [5, 5, 5, 8, 16, 32, 64])

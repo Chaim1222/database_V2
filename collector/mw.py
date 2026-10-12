@@ -10,6 +10,14 @@ BATCH = 50
 POST_THRESHOLD = 600   # תווים לפני קידוד; מעליו POST
 
 
+def retry_delay(response, backoff):
+    """Retry-After also applies to HTTP 200/maxlag; never shorten its numeric minimum."""
+    try:
+        return max(backoff, int(response.headers.get("Retry-After", 0)))
+    except (TypeError, ValueError):
+        return backoff
+
+
 class MediaWiki:
     def __init__(self, api_url, session=None, sleep=time.sleep):
         self.api_url = api_url
@@ -29,15 +37,12 @@ class MediaWiki:
                 else:
                     response = self.session.get(self.api_url, params=params, timeout=60)
                 if response.status_code in (429, 503):
-                    # הגבלת קצב: מכבדים Retry-After (עד 2 דקות), אחרת המתנה מעריכית; ההעשרה שולחת עשרות אלפי בקשות
-                    try:
-                        wait = min(max(wait, int(response.headers.get("Retry-After", 0))), 120)
-                    except (TypeError, ValueError):
-                        pass
+                    wait = retry_delay(response, wait)
                     raise requests.RequestException(f"HTTP {response.status_code}")
                 response.raise_for_status()
                 data = response.json()
                 if data.get("error", {}).get("code") == "maxlag":
+                    wait = retry_delay(response, max(wait, 5))
                     raise requests.RequestException("maxlag")
                 if "error" in data:
                     raise RuntimeError(f"שגיאת API: {data['error']}")
@@ -123,3 +128,4 @@ class MediaWiki:
         params = {"action": "query", "generator": "allpages", "gapnamespace": 0, "gapfilterredir": "nonredirects",
                   "gaplimit": 500, "prop": "info"}
         yield from self.paged(params, "pages")
+
