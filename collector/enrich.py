@@ -182,17 +182,40 @@ def run_group(group, clients, rpc, limit=None, log=print):
     kind, fetch = FETCHERS[group]
     client = clients[kind]
     SKIP_BUDGET["left"] = 20
-    after, done = 0, 0
+    after, consecutive_failures = 0, 0
+    result = {"done": 0, "failed_ids": [], "skipped_ids": [], "complete": True}
     while True:
-        pending = rpc.call("enrich_pending", {"p_group": group, "p_after": after, "p_limit": 500}) or []
+        try:
+            pending = rpc.call("enrich_pending", {"p_group": group, "p_after": after, "p_limit": 500}) or []
+        except Exception as exc:
+            result.update(complete=False, stopped_early=True, read_error_type=type(exc).__name__)
+            return result
         if not pending:
-            return done
+            return result
         for part in chunks(pending, BATCH if group != "created" else 100):
-            rows = fetch(client, part)
-            if rows:
-                rpc.call("sync_apply_enrichment", {"p_group": group, "p_rows": rows})
-            done += len(rows)
+            try:
+                rows = fetch(client, part)
+                if rows:
+                    rpc.call("sync_apply_enrichment", {"p_group": group, "p_rows": rows})
+            except Exception as exc:
+                ids = [p["wiki_id"] for p in part]
+                result["failed_ids"].extend(ids)
+                result["complete"] = False
+                consecutive_failures += 1
+                log(f"העשרה {group}: לא הושלמו {ids}; {type(exc).__name__}; נשארים ממתינים להרצה חוזרת")
+                # An outage stops this group, never the independent groups.
+                if consecutive_failures >= 3 or SKIP_BUDGET["left"] < 0:
+                    result["stopped_early"] = True
+                    return result
+                continue
+            consecutive_failures = 0
+            written = {r["wiki_id"] for r in rows}
+            skipped = [p["wiki_id"] for p in part if p["wiki_id"] not in written]
+            result["skipped_ids"].extend(skipped)
+            result["complete"] = result["complete"] and not skipped
+            result["done"] += len(rows)
         after = pending[-1]["wiki_id"]
-        log(f"העשרה {group}: {done:,}")
-        if limit and done >= limit:
-            return done
+        log(f"העשרה {group}: הושלמו {result['done']:,}; לא הושלמו {len(result['failed_ids']) + len(result['skipped_ids']):,}")
+        if limit and result["done"] >= limit:
+            result.update(complete=False, stopped_early=True)
+            return result

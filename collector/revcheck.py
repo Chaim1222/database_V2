@@ -128,12 +128,38 @@ def check_rows(wiki_mw, rows, max_rev):
 def run_revcheck(wiki_mw, rpc, log=print):
     """סריקה מלאה במנות לפי מזהה: כל מנה נכתבת ונבדקת בנפרד (אידמפוטנטי); שורה שתוקנה נמחקת."""
     max_rev = fetch_max_rev(wiki_mw)
+    # Validate API-sized batches independently; cleanup is scoped to verified rows only.
+    # rev_scope has no durable scan cursor: skipped rows are retried by the next full run.
     after, scanned, found = 0, 0, 0
+    failed_ids = []
     while True:
         rows = rpc.call("rev_scope", {"p_after": after, "p_limit": 2000}) or []
         if not rows:
-            return {"scanned": scanned, "findings": found}
-        findings = check_rows(wiki_mw, rows, max_rev)
-        rpc.call("sync_apply_rev_checks", {"p_rows": findings, "p_scope_ids": [r["mech_id"] for r in rows]})
-        scanned, found, after = scanned + len(rows), found + len(findings), rows[-1]["mech_id"]
-        log(f"גרסאות: נבדקו {scanned:,}, ממצאים {found:,}")
+            result = {"scanned": scanned, "findings": found}
+            if failed_ids:
+                result.update(complete=False, failed_ids=failed_ids, retry="python -m collector.cli revcheck")
+            return result
+        findings, verified = [], []
+        for part in chunks(rows, BATCH):
+            for attempt in range(2):
+                try:
+                    batch_findings = check_rows(wiki_mw, part, max_rev)
+                    break
+                except Exception as exc:
+                    if attempt == 1:
+                        ids = [r["mech_id"] for r in part]
+                        failed_ids.extend(ids)
+                        log(f"גרסאות: נשמר המצב הקודם עבור {ids}; {type(exc).__name__}; ניסיון חוזר בריצה הבאה")
+            else:
+                continue
+            findings.extend(batch_findings)
+            verified.extend(r["mech_id"] for r in part)
+        if verified:
+            try:
+                rpc.call("sync_apply_rev_checks", {"p_rows": findings, "p_scope_ids": verified})
+                scanned, found = scanned + len(verified), found + len(findings)
+            except Exception as exc:
+                failed_ids.extend(verified)
+                log(f"גרסאות: כתיבה לא אושרה עבור {verified}; {type(exc).__name__}; הרצה חוזרת בטוחה")
+        after = rows[-1]["mech_id"]
+        log(f"גרסאות: נבדקו {scanned:,}, ממצאים {found:,}, לא הושלמו {len(failed_ids):,}")

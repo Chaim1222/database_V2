@@ -6,7 +6,17 @@ set -euo pipefail
 cd "$(dirname "$0")/../db/migrations"
 : "${DATABASE_URL:?חסר DATABASE_URL}"
 q() { psql "$DATABASE_URL" -X -q -t -A -v ON_ERROR_STOP=1 "$@"; }
-applied=$(q -c "select version from ops.schema_migration order by version" 2>/dev/null || true)
+# A failed read is not an empty migration history. Retry reads only, before any write.
+for attempt in 1 2 3; do
+  if applied=$(q -c "select version from ops.schema_migration order by version"); then
+    break
+  fi
+  if [ "$attempt" = 3 ]; then
+    echo "Cannot read migration history; no migrations applied. Rerun after restoring access." >&2
+    exit 1
+  fi
+  sleep "$attempt"
+done
 pending=(); in_repo=()
 for f in [0-9]*.sql; do
   v=${f%%_*}; in_repo+=("$v")
@@ -23,3 +33,4 @@ for f in "${pending[@]}"; do
   q -1 -f "$f"
 done
 echo "הסתיים"
+

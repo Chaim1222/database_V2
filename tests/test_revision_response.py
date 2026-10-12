@@ -23,8 +23,9 @@ class RevisionResponseTests(unittest.TestCase):
         rpc = Rpc()
         broken = SimpleNamespace(get=lambda p: {"query": {"recentchanges": [{"revid": 1000}]}}
                                  if "list" in p else {"query": {}})
-        with self.assertRaises(RuntimeError):
-            subject.run_revcheck(broken, rpc, log=lambda _: None)
+        result = subject.run_revcheck(broken, rpc, log=lambda _: None)
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["failed_ids"], [2])
         self.assertEqual(len(rpc.applied), 1)
         self.assertEqual(set(rpc.findings), {1, 2})
         healthy = SimpleNamespace(get=lambda p: {"query": {"recentchanges": [{"revid": 1000}]}}
@@ -74,3 +75,4 @@ class RevisionResponseTests(unittest.TestCase):
     def test_hidden_revision_does_not_change_page_identity(self):
         page = dict(LIVE, revisions=[{"revid": 50, "texthidden": True}])
         self.assertEqual(self.resolve({"query": {"pages": [page]}}, (50,))[50]["page_id"], 5)
+

@@ -61,9 +61,9 @@ class EnrichmentRaceTests(unittest.TestCase):
                     return [] if payload['p_after'] else [{'wiki_id': 1, 'title': 'א'}]
                 self.applied.extend(payload['p_rows'])
         rpc = Rpc()
-        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 9, 'title': 'א', 'length': 99}]}})}, rpc), 0)
+        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 9, 'title': 'א', 'length': 99}]}})}, rpc)["done"], 0)
         self.assertEqual(rpc.applied, [])
-        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 1, 'title': 'א', 'length': 12}]}})}, rpc), 1)
+        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 1, 'title': 'א', 'length': 12}]}})}, rpc)["done"], 1)
         self.assertEqual(rpc.applied, [{'wiki_id': 1, 'length': 12}])
 
 
@@ -145,3 +145,4 @@ class ReconcilePolicyTests(unittest.TestCase):
                     patch('collector.cli.Rpc'), patch('collector.cli.MediaWiki'), \
                     patch('collector.cli.run_reconcile', return_value={'ok': ok, 'sites': []}):
                 self.assertEqual(main(['reconcile']), expected)
+

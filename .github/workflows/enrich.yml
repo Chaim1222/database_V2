@@ -29,8 +29,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m collector.cli enrich $GROUPS
+      - run: python -m collector.cli enrich $ENRICH_GROUPS
         env:
-          GROUPS: ${{ inputs.groups }}
+          ENRICH_GROUPS: ${{ inputs.groups }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+

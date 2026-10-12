@@ -43,9 +43,20 @@ def import_chunked(rpc, admin, data):
     total = {"inserted": {k: 0 for k in KEYS}, "skipped": {k: [] for k in KEYS}}
     for name, param in KEYS.items():
         rows = data[name]
+        consecutive_failures = 0
         for i in range(0, len(rows), CHUNK):
             payload = {"p_admin": admin, "p_manual": [], "p_blacklist": [], "p_feedback": [], "p_locks": [], param: rows[i:i + CHUNK]}
-            result = rpc.call("import_human_data", payload)
+            try:
+                result = rpc.call("import_human_data", payload)
+            except Exception as exc:
+                total.setdefault("failed_batches", []).append({"table": name, "offset": i,
+                    "rows": len(rows[i:i + CHUNK]), "error_type": type(exc).__name__})
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    total["failed_batches"][-1]["remaining_rows"] = max(0, len(rows) - i - CHUNK)
+                    break
+                continue
+            consecutive_failures = 0
             total["inserted"][name] += result["inserted"].get(name, 0)
             total["skipped"][name] += result["skipped"].get(name, [])
     return total
@@ -53,20 +64,35 @@ def import_chunked(rpc, admin, data):
 
 def main(argv, env=os.environ, session=None):
     dry = "--dry-run" in argv
-    data = {name: read_v1(env["V1_SUPABASE_URL"], env["V1_SUPABASE_SERVICE_KEY"], *spec, session=session)
-            for name, spec in TABLES.items()}
+    data, read_errors = {}, {}
+    for name, spec in TABLES.items():
+        try:
+            data[name] = read_v1(env["V1_SUPABASE_URL"], env["V1_SUPABASE_SERVICE_KEY"], *spec, session=session)
+        except Exception as exc:
+            data[name] = []
+            read_errors[name] = type(exc).__name__
+    if read_errors:
+        print(json.dumps({"read_errors": read_errors, "retry": "python -m collector.import_v1"}))
     print("נקראו מ-v1: " + ", ".join(f"{name}={len(rows)}" for name, rows in data.items()))
     if dry:
-        return 0
+        return int(bool(read_errors))
     from .rpc import Rpc
     rpc = Rpc(env["SUPABASE_URL"], env["SUPABASE_SERVICE_KEY"])
     result = import_chunked(rpc, env["V2_ADMIN_UID"], data)
-    rpc.call("maintenance_refresh_counts", {})
+    result["read_errors"] = read_errors
+    try:
+        rpc.call("maintenance_refresh_counts", {})
+    except Exception as exc:
+        result["counts_error"] = type(exc).__name__
+    result["complete"] = not (read_errors or result.get("failed_batches") or result.get("counts_error"))
+    if not result["complete"]:
+        result["retry"] = "python -m collector.import_v1"
     print(json.dumps(result, ensure_ascii=False, indent=2))
     skipped = sum(len(v) for v in result["skipped"].values())
     print(f"דולגו {skipped} שורות (לא קיימות במראה או רמה לא מוכרת): יש לבדוק אותן ידנית" if skipped else "לא דולגה אף שורה")
-    return 0
+    return int(not result["complete"])
 
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
