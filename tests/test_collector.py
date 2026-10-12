@@ -742,7 +742,7 @@ class RevCheckTests(unittest.TestCase):
                 if "revids" in params:
                     pages = [{"pageid": 5, "title": "חי", "ns": 0, "revisions": [{"revid": 50}]},
                              {"pageid": 6, "title": "הפניה", "ns": 0, "redirect": True, "revisions": [{"revid": 60}]}]
-                    return {"query": {"pages": pages}}
+                    return {"query": {"pages": pages, "badrevids": {"70": {"revid": 70, "missing": True}}}}
                 if "titles" in params:
                     return {"query": {"redirects": [{"from": "הפניה", "to": "יעד אחר"}]}}
                 return {"query": {"recentchanges": [{"revid": 1000}]}}
