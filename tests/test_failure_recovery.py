@@ -134,7 +134,7 @@ class RecoveryTests(unittest.TestCase):
 
 
 class MigrationReadTests(unittest.TestCase):
-    def run_migration(self, fail_count):
+    def run_migration(self, fail_count, history="present", check=False):
         source = Path(__file__).resolve().parents[1] / 'ops/apply_migrations.sh'
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -142,11 +142,11 @@ class MigrationReadTests(unittest.TestCase):
             (base/'ops/apply_migrations.sh').write_text(source.read_text())
             (base/'db/migrations/0001_test.sql').write_text('select 1;')
             stub = base/'bin/psql'
-            stub.write_text('#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\np=Path(os.environ["FIXTURE_LOG"])\ns=p.read_text() if p.exists() else ""\np.write_text(s+" ".join(sys.argv[1:])+"\\n")\nif "-c" in sys.argv:\n n=s.count("-c")\n if n<int(os.environ["FIXTURE_FAILURES"]): sys.exit(1)\n print("0001")\nelse: sys.exit(77)\n')
+            stub.write_text('#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\np=Path(os.environ["FIXTURE_LOG"])\ns=p.read_text() if p.exists() else ""\np.write_text(s+" ".join(sys.argv[1:])+"\\n")\nif "-c" in sys.argv:\n    n=s.count("-c")\n    if n<int(os.environ["FIXTURE_FAILURES"]): sys.exit(1)\n    if "to_regclass" in " ".join(sys.argv):\n        print("f" if os.environ["FIXTURE_HISTORY"] == "missing" else "t")\n    elif os.environ["FIXTURE_HISTORY"] == "denied":\n        sys.exit(1)\n    else:\n        print("0001")\nelif os.environ["FIXTURE_HISTORY"] != "missing":\n    sys.exit(77)\n')
             stub.chmod(0o755)
             sleep = base/'bin/sleep'; sleep.write_text('#!/bin/sh\nexit 0\n'); sleep.chmod(0o755)
-            env = dict(os.environ, PATH=str(base/'bin')+os.pathsep+os.environ['PATH'], DATABASE_URL='fixture', FIXTURE_LOG=str(base/'calls'), FIXTURE_FAILURES=str(fail_count))
-            result = subprocess.run(['bash', str(base/'ops/apply_migrations.sh')], env=env, capture_output=True, text=True)
+            env = dict(os.environ, PATH=str(base/'bin')+os.pathsep+os.environ['PATH'], DATABASE_URL='fixture', FIXTURE_LOG=str(base/'calls'), FIXTURE_FAILURES=str(fail_count), FIXTURE_HISTORY=history)
+            result = subprocess.run(['bash', str(base/'ops/apply_migrations.sh')] + (['--check'] if check else []), env=env, capture_output=True, text=True)
             return result, (base/'calls').read_text()
 
     def test_history_outage_never_attempts_migrations(self):
@@ -158,8 +158,28 @@ class MigrationReadTests(unittest.TestCase):
     def test_history_recovers_before_any_write(self):
         result, calls = self.run_migration(1)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls.count('-c'), 2)
+        self.assertEqual(calls.count('-c'), 3)
         self.assertNotIn('-f ', calls)
+
+    def test_missing_registry_bootstraps_only_after_successful_catalog_read(self):
+        result, calls = self.run_migration(0, history='missing')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('to_regclass', calls)
+        self.assertNotIn('select version', calls)
+        self.assertIn('-f 0001_test.sql', calls)
+
+    def test_missing_registry_check_mode_lists_pending_without_writes(self):
+        result, calls = self.run_migration(0, history='missing', check=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('0001_test.sql', result.stdout)
+        self.assertNotIn('-f ', calls)
+
+    def test_existing_registry_read_failure_never_bootstraps(self):
+        result, calls = self.run_migration(0, history='denied')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(calls.count('select version'), 3)
+        self.assertNotIn('-f ', calls)
+
 
 class MaxlagRetryTests(unittest.TestCase):
     def response(self, code=200, body=None, retry=None):

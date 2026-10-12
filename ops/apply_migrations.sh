@@ -8,11 +8,18 @@ cd "$(dirname "$0")/../db/migrations"
 q() { psql "$DATABASE_URL" -X -q -t -A -v ON_ERROR_STOP=1 "$@"; }
 # A failed read is not an empty migration history. Retry reads only, before any write.
 for attempt in 1 2 3; do
-  if applied=$(q -c "select version from ops.schema_migration order by version"); then
-    break
+  if history_exists=$(q -c "select to_regclass('ops.schema_migration') is not null"); then
+    if [ "$history_exists" = f ]; then
+      # 0022 creates and backfills the registry during a fresh bootstrap.
+      applied=""
+      break
+    fi
+    if [ "$history_exists" = t ] && applied=$(q -c "select version from ops.schema_migration order by version"); then
+      break
+    fi
   fi
   if [ "$attempt" = 3 ]; then
-    echo "Cannot read migration history; no migrations applied. Rerun after restoring access." >&2
+    echo "לא ניתן לקרוא את היסטוריית המיגרציות; לא הוחלה מיגרציה. יש להריץ שוב אחרי תיקון הגישה." >&2
     exit 1
   fi
   sleep "$attempt"

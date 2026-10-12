@@ -12,9 +12,12 @@ trap cleanup EXIT
 run "psql -X -q -d postgres -c 'create database $DB'" >/dev/null
 apply() { run "psql -X -q -1 -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$1'" ; }
 apply tests/00_supabase_stub.sql
-for f in migrations/*.sql; do echo "migration: $f"; apply "$f"; done
+# Exercise the production runner on an empty database, then verify safe replay.
+run "DATABASE_URL='postgresql:///$DB' bash '$PWD/../ops/apply_migrations.sh'"
+run "DATABASE_URL='postgresql:///$DB' bash '$PWD/../ops/apply_migrations.sh' --check"
 fail=0
 for f in tests/t*.sql; do
   if out=$(run "psql -X -q -t -A -v ON_ERROR_STOP=1 -d $DB -f '$PWD/$f' 2>&1"); then echo "$out" | grep -E "^ok" || true; else echo "FAIL $f"; echo "$out" | tail -8; fail=1; fi
 done
 [ "$fail" = 0 ] && echo "ALL OK" || { echo "FAILED"; exit 1; }
+
