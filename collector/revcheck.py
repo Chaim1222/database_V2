@@ -34,12 +34,41 @@ def names_match(mech_title, wiki_title):
 
 def resolve_revisions(wiki_mw, rev_ids):
     """{rev_id: {page_id, title, ns, redirect} | None (לא קיימת)} לבקשה אחת (עד 50)."""
-    result = {r: None for r in rev_ids}
+    # Only explicit badrevids means missing; incomplete replies stop before writes.
+    asked = set(rev_ids)
+    if not asked:
+        return {}
     data = wiki_mw.get({"action": "query", "revids": "|".join(map(str, rev_ids)), "prop": "revisions|info", "rvprop": "ids"})
-    for page in data.get("query", {}).get("pages", []):
-        info = {"page_id": page.get("pageid"), "title": page.get("title"), "ns": page.get("ns"), "redirect": bool(page.get("redirect"))}
-        for revision in page.get("revisions") or []:
-            result[revision["revid"]] = info
+    query = data.get("query") if isinstance(data, dict) else None
+    if not isinstance(query, dict) or "error" in data or "continue" in data:
+        raise RuntimeError("תשובת גרסאות חסרה או לא הושלמה")
+    pages, missing = query.get("pages", []), query.get("badrevids", {})
+    if isinstance(missing, dict):
+        missing = list(missing.values())
+    if not isinstance(pages, list) or not isinstance(missing, list):
+        raise RuntimeError("מבנה תשובת גרסאות לא תקין")
+    result = {}
+    for item in missing:
+        if (not isinstance(item, dict) or item.get("missing") is not True
+                or type(item.get("revid")) is not int or item["revid"] not in asked
+                or item["revid"] in result):
+            raise RuntimeError("מזהה גרסה חסרה לא תקין או כפול")
+        result[item["revid"]] = None
+    for page in pages:
+        if (not isinstance(page, dict) or type(page.get("pageid")) is not int
+                or page["pageid"] <= 0 or type(page.get("ns")) is not int
+                or not isinstance(page.get("title"), str) or not page["title"]
+                or not isinstance(page.get("revisions"), list) or not page["revisions"]):
+            raise RuntimeError("תשובת גרסאות ללא זהות דף תקינה")
+        info = {"page_id": page["pageid"], "title": page["title"],
+                "ns": page["ns"], "redirect": bool(page.get("redirect"))}
+        for revision in page["revisions"]:
+            rev = revision.get("revid") if isinstance(revision, dict) else None
+            if type(rev) is not int or rev not in asked or rev in result:
+                raise RuntimeError("מזהה גרסה לא צפוי או כפול")
+            result[rev] = info
+    if set(result) != asked:
+        raise RuntimeError("תשובת גרסאות חלקית; אין להסיק שהגרסאות החסרות נמחקו")
     return result
 
 
@@ -99,12 +128,38 @@ def check_rows(wiki_mw, rows, max_rev):
 def run_revcheck(wiki_mw, rpc, log=print):
     """סריקה מלאה במנות לפי מזהה: כל מנה נכתבת ונבדקת בנפרד (אידמפוטנטי); שורה שתוקנה נמחקת."""
     max_rev = fetch_max_rev(wiki_mw)
+    # Validate API-sized batches independently; cleanup is scoped to verified rows only.
+    # rev_scope has no durable scan cursor: skipped rows are retried by the next full run.
     after, scanned, found = 0, 0, 0
+    failed_ids = []
     while True:
         rows = rpc.call("rev_scope", {"p_after": after, "p_limit": 2000}) or []
         if not rows:
-            return {"scanned": scanned, "findings": found}
-        findings = check_rows(wiki_mw, rows, max_rev)
-        rpc.call("sync_apply_rev_checks", {"p_rows": findings, "p_scope_ids": [r["mech_id"] for r in rows]})
-        scanned, found, after = scanned + len(rows), found + len(findings), rows[-1]["mech_id"]
-        log(f"גרסאות: נבדקו {scanned:,}, ממצאים {found:,}")
+            result = {"scanned": scanned, "findings": found}
+            if failed_ids:
+                result.update(complete=False, failed_ids=failed_ids, retry="python -m collector.cli revcheck")
+            return result
+        findings, verified = [], []
+        for part in chunks(rows, BATCH):
+            for attempt in range(2):
+                try:
+                    batch_findings = check_rows(wiki_mw, part, max_rev)
+                    break
+                except Exception as exc:
+                    if attempt == 1:
+                        ids = [r["mech_id"] for r in part]
+                        failed_ids.extend(ids)
+                        log(f"גרסאות: נשמר המצב הקודם עבור {ids}; {type(exc).__name__}; ניסיון חוזר בריצה הבאה")
+            else:
+                continue
+            findings.extend(batch_findings)
+            verified.extend(r["mech_id"] for r in part)
+        if verified:
+            try:
+                rpc.call("sync_apply_rev_checks", {"p_rows": findings, "p_scope_ids": verified})
+                scanned, found = scanned + len(verified), found + len(findings)
+            except Exception as exc:
+                failed_ids.extend(verified)
+                log(f"גרסאות: כתיבה לא אושרה עבור {verified}; {type(exc).__name__}; הרצה חוזרת בטוחה")
+        after = rows[-1]["mech_id"]
+        log(f"גרסאות: נבדקו {scanned:,}, ממצאים {found:,}, לא הושלמו {len(failed_ids):,}")

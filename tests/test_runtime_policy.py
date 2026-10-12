@@ -61,13 +61,71 @@ class EnrichmentRaceTests(unittest.TestCase):
                     return [] if payload['p_after'] else [{'wiki_id': 1, 'title': 'א'}]
                 self.applied.extend(payload['p_rows'])
         rpc = Rpc()
-        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 9, 'title': 'א', 'length': 99}]}})}, rpc), 0)
+        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 9, 'title': 'א', 'length': 99}]}})}, rpc)["done"], 0)
         self.assertEqual(rpc.applied, [])
-        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 1, 'title': 'א', 'length': 12}]}})}, rpc), 1)
+        self.assertEqual(enrich.run_group('length', {'wiki': Reply({'query': {'pages': [{'pageid': 1, 'title': 'א', 'length': 12}]}})}, rpc)["done"], 1)
         self.assertEqual(rpc.applied, [{'wiki_id': 1, 'length': 12}])
 
 
 class ReconcilePolicyTests(unittest.TestCase):
+    def test_fix_uses_fresh_source_without_upstream_job_results(self):
+        from collector.classify import CAT_CREATED, classify
+
+        fields = classify({CAT_CREATED})
+        owner = self
+
+        class Source:
+            def all_pages(self):
+                return [{'pageid': i, 'title': str(i), 'ns': 0} for i in range(1, 101)]
+
+            def categories(self, ids):
+                return {i: {CAT_CREATED} for i in ids}
+
+            def get(self, params):
+                return {'query': {params['list']: []}}
+
+        class Rpc:
+            def __init__(self):
+                self.calls = []
+                self.fixed = False
+
+            def call(self, fn, payload):
+                self.calls.append((fn, payload))
+                if fn == 'sync_run_start':
+                    return {'run_id': 'r', 'watermarks': {'mechalol/delta': '2026-10-05T00:00:00Z'}}
+                if fn == 'reconcile_pages':
+                    if payload['p_after']:
+                        return []
+                    rows = [{'page_id': i, 'title': str(i), **fields} for i in range(1, 101)]
+                    rows[0]['needs_attention'] = not self.fixed
+                    return rows
+                if fn == 'sync_apply_mech_pages':
+                    owner.assertEqual(payload['p_gone_ids'], [])
+                    owner.assertEqual(payload['p_gone_titles'], [])
+                    owner.assertEqual(payload['p_live'], [{'page_id': 1, 'title': '1', **fields}])
+                    self.fixed = True
+                    return {}
+                if fn == 'match_conflicts':
+                    # Existing template conflicts are reported, not classification input.
+                    return [{'kind': 'fixture', 'mech_id': 1, 'mech_title': '1',
+                             'wiki_id': 10, 'other_wiki_id': 20}]
+                if fn in ('reconcile_record', 'sync_run_finish'):
+                    return None
+                raise AssertionError('Unexpected upstream dependency: ' + fn)
+
+        rpc = Rpc()
+        report = reconcile.run_reconcile({'mechalol': Source()}, rpc, env={}, fix=True)
+        self.assertTrue(report['ok'])
+        self.assertTrue(rpc.fixed)
+        self.assertEqual(rpc.calls[-1][1]['p_status'], 'succeeded')
+
+        rpc = Rpc()
+        with patch.object(Source, 'categories', side_effect=RuntimeError('source unavailable')):
+            with self.assertRaisesRegex(RuntimeError, 'source unavailable'):
+                reconcile.run_reconcile({'mechalol': Source()}, rpc, env={}, fix=True)
+        self.assertFalse(rpc.fixed)
+        self.assertEqual(rpc.calls[-1][1]['p_status'], 'failed')
+
     def run_case(self, fix=True, persist=True, fail_verify=False, title_gap=False):
         fields = {'status': 'imported_documented', 'source_type': 'wikipedia_documented',
                   'needs_attention': False, 'is_dictionary': False}
@@ -145,3 +203,4 @@ class ReconcilePolicyTests(unittest.TestCase):
                     patch('collector.cli.Rpc'), patch('collector.cli.MediaWiki'), \
                     patch('collector.cli.run_reconcile', return_value={'ok': ok, 'sites': []}):
                 self.assertEqual(main(['reconcile']), expected)
+

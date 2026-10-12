@@ -52,7 +52,18 @@ def main(argv):
     elif argv[0] == "enrich":
         clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"], "wikidata": MediaWiki(WIKIDATA_API)}
         groups = argv[1:] or list(GROUPS)
-        stats = {g: run_group(g, clients, rpc) for g in groups}
+        unknown = set(groups) - set(GROUPS)
+        if unknown:
+            raise ValueError(f"Unknown enrichment groups: {sorted(unknown)}")
+        stats = {}
+        for group in groups:
+            try:
+                stats[group] = run_group(group, clients, rpc)
+            except Exception as exc:
+                stats[group] = {"complete": False, "error_type": type(exc).__name__}
+            if stats[group].get("complete") is False:
+                stats[group]["retry"] = f"python -m collector.cli enrich {group}"
+        # All independent groups finish before reporting partial completion.
     elif argv[0] == "templates":
         stats = {"checked": run_pending(mws["mechalol"], mws["wikipedia"], rpc)}
     else:   # load | rebuild
@@ -64,8 +75,10 @@ def main(argv):
             print(f"דמפ ויקיפדיה: {sources['wikipedia'].date} ({sources['wikipedia'].url})")
         stats = run_initial_load(mws, rpc, sources=sources, prune=argv[0] == "rebuild")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
-    return 0
+    return int(stats.get("complete") is False or any(
+        isinstance(value, dict) and value.get("complete") is False for value in stats.values()))
 
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+

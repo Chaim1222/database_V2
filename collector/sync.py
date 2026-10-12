@@ -76,19 +76,27 @@ def run_sync(mws, rpc, now=None, overlap=OVERLAP, dry_run=False):
     run_id, marks = started["run_id"], started["watermarks"]
     until = _iso(now)
     stats, new_marks = {}, {}
-    try:
-        for site, mw in mws.items():
+    errors = {}
+    for site, mw in mws.items():
+        try:
             key = f"{site}/delta"
             if key not in marks:
                 raise RuntimeError(f"אין נקודת התחלה ל-{key}: נדרשת טעינה ראשונית")
             since = _iso(datetime.fromisoformat(marks[key].replace("Z", "+00:00")) - overlap)
             stats[site] = sync_site(site, mw, rpc, run_id, since, until, wiki_mw=mws.get("wikipedia"), dry_run=dry_run)
             new_marks[key] = until
-    except Exception as exc:
-        rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": str(exc)[:1000]})
-        raise
+        except Exception as exc:
+            errors[site] = type(exc).__name__
+            stats[site] = {"complete": False, "error_type": type(exc).__name__}
+            print(f"sync {site}: incomplete ({type(exc).__name__}); continuing independent sources", flush=True)
+    if errors:
+        # Keep the existing all-or-nothing watermark contract. Applied batches replay safely.
+        message = f"Incomplete sources: {errors}; rerun sync to replay the unchanged window"
+        rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "failed", "p_stats": stats, "p_error": message})
+        raise RuntimeError(message)
     if dry_run:   # הריצה נרשמת כמבוטלת ונקודות ההתקדמות לא זזות
         rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "cancelled", "p_stats": stats, "p_error": "dry run"})
         return stats
     rpc.call("sync_run_finish", {"p_run": run_id, "p_status": "succeeded", "p_stats": stats, "p_watermarks": new_marks})
     return stats
+

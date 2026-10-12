@@ -513,15 +513,16 @@ class EnrichTests(unittest.TestCase):
                     return [{"wiki_id": 1, "title": "א"}]
         rpc = Rpc()
         mw = self.Mw({"query": {"pages": [{"pageid": 1, "title": "א", "length": 5}]}})
-        self.assertEqual(run_group("length", {"wiki": mw}, rpc, log=lambda *_: None), 1)
+        self.assertEqual(run_group("length", {"wiki": mw}, rpc, log=lambda *_: None)["done"], 1)
         self.assertEqual([c[0] for c in rpc.calls], ["enrich_pending", "sync_apply_enrichment", "enrich_pending"])
 
         class Boom:
             def get(self, params):
                 raise RuntimeError("api down")
         rpc2 = Rpc()
-        with self.assertRaises(RuntimeError):
-            run_group("length", {"wiki": Boom()}, rpc2, log=lambda *_: None)
+        result = run_group("length", {"wiki": Boom()}, rpc2, log=lambda *_: None)
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["failed_ids"], [1])
         self.assertNotIn("sync_apply_enrichment", [c[0] for c in rpc2.calls])
 
 
@@ -742,7 +743,7 @@ class RevCheckTests(unittest.TestCase):
                 if "revids" in params:
                     pages = [{"pageid": 5, "title": "חי", "ns": 0, "revisions": [{"revid": 50}]},
                              {"pageid": 6, "title": "הפניה", "ns": 0, "redirect": True, "revisions": [{"revid": 60}]}]
-                    return {"query": {"pages": pages}}
+                    return {"query": {"pages": pages, "badrevids": {"70": {"revid": 70, "missing": True}}}}
                 if "titles" in params:
                     return {"query": {"redirects": [{"from": "הפניה", "to": "יעד אחר"}]}}
                 return {"query": {"recentchanges": [{"revid": 1000}]}}
@@ -886,3 +887,4 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(any("lastrevid" in f for f in run_smoke({"s": self.Mw(drop_key="lastrevid")})))
         self.assertTrue(any("חשוד" in f for f in run_smoke({"s": self.Mw(quiet=True)})))
         self.assertTrue(any("allpages" in f for f in run_smoke({"s": self.Mw(n=10)})))
+
