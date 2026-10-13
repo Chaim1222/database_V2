@@ -5,7 +5,7 @@
 ## מה בוצע
 - כל המיגרציות עד 0039 מוחלות; התזמונים פעילים (`ENABLE_SCHEDULE=true`).
 - נתוני האדם הועברו מ-V1 (שיוכים, החרגות, משובים, נעילות).
-- הדשבורד: הממשק המשותף מהריפו `database` (`gadget/gadget-searchHelperDashboard.js`) בדף `מיוחד:דף ריק/database-v2`. כתיבות המנהל ב-V2 פעילות דרך RPC (`set_manual_link`, `add_exclusion`, `mark_feedback`/`unmark_feedback`). הדשבורד העצמאי (`dashboard/`) אינו בשימוש.
+- הדשבורד: הממשק המשותף מהריפו `database` (`gadget/gadget-searchHelperDashboard.js`) בדף `מיוחד:דף ריק/database-v2`. כתיבות המנהל ב-V2 פעילות דרך RPC (`set_manual_link`, `add_exclusion`, `mark_feedback`/`unmark_feedback`). הדשבורד העצמאי (`dashboard/`) הוסר מהריפו ב-13.10 (החלטת חיים); בהיסטוריית git עד `944b826`.
 - הסינון: המנוע המשותף (`word-filter/` בריפו `database`) עם `--backend v2`.
 
 ## ריצה במקביל ותוכנית חזרה
