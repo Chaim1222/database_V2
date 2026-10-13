@@ -709,13 +709,23 @@ begin
         raise exception 'duplicate mech_id in p_rows' using errcode = '22023';
     end if;
 
+    -- same לאותו שם בתבנית שכבר קושר דרך העברה (derived.link_moved_templates): הקישור לפי מזהה נשמר
     create temp table _tc as
-    select r.mech_id, r.rev_id, r.template_ref, r.template_rev, r.template_title,
-           case when r.outcome = 'ok' and not exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
+    select r.mech_id, r.rev_id, coalesce(r.template_ref, keep.template_ref) as template_ref, r.template_rev, r.template_title,
+           case when keep.wiki_id is not null then 'ok'
+                when r.outcome = 'ok' and not exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
                 then 'unresolved' else r.outcome end as outcome,
-           case when r.outcome = 'ok' and exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
+           case when keep.wiki_id is not null then keep.wiki_id
+                when r.outcome = 'ok' and exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
                 then r.wiki_id end as wiki_id
-    from jsonb_to_recordset(p_rows) as r(mech_id bigint, outcome text, rev_id bigint, wiki_id bigint, template_ref text, template_rev bigint, template_title text);
+    from jsonb_to_recordset(p_rows) as r(mech_id bigint, outcome text, rev_id bigint, wiki_id bigint, template_ref text, template_rev bigint, template_title text)
+    left join lateral (
+        select t.wiki_id, t.template_ref
+        from derived.template_link t
+        join mirror.wiki_page w on w.page_id = t.wiki_id
+        where r.outcome = 'same' and t.mech_id = r.mech_id
+          and mirror.title_key(t.template_ref) = mirror.title_key(r.template_title)
+    ) keep on true;
 
     select coalesce(array_agg(t.wiki_id), '{}') into v_old
     from derived.template_link t join _tc c on c.mech_id = t.mech_id
@@ -768,6 +778,8 @@ declare
     v_ids bigint[];
     v_gap integer := 0;
     v_gap_ids bigint[];
+    v_moved_ids bigint[];
+    v_moved_old text[];
 begin
     if exists (select 1 from jsonb_to_recordset(p_live) as l(page_id bigint) group by page_id having count(*) > 1)
        or exists (select 1 from jsonb_to_recordset(p_live) as l(title text) group by title having count(*) > 1) then
@@ -793,6 +805,12 @@ begin
         join jsonb_to_recordset(p_live) as l(page_id bigint, title text) on l.title = w.title
         where l.page_id <> w.page_id and not (w.page_id = any(v_ids))
     ) affected;
+
+    -- העברות: המזהה והכותרת הקודמת, לפני שהכותרת מוחלפת
+    select coalesce(array_agg(w.page_id), '{}'), coalesce(array_agg(w.title), '{}') into v_moved_ids, v_moved_old
+    from mirror.wiki_page w
+    join jsonb_to_recordset(p_live) as l(page_id bigint, title text) on l.page_id = w.page_id
+    where w.title <> l.title;
 
     -- מזהים שנעלמו (אלא אם הם גם חיים בקלט: אז המצב החי גובר)
     delete from mirror.wiki_page w
@@ -827,6 +845,9 @@ begin
         returning (xmax = 0) as inserted
     )
     select count(*) filter (where inserted), count(*) filter (where not inserted) into v_inserted, v_updated from up;
+
+    -- זהות דרך העברה (ראו כותרת המיגרציה); המזהים כבר ב-v_gap_ids כי הכותרת שלהם השתנתה
+    perform derived.link_moved_templates(v_moved_ids, v_moved_old);
 
     if cardinality(v_gap_ids || p_gone_ids) > 0 then
         v_gap := derived.refresh_wiki_gap(v_gap_ids || p_gone_ids);
@@ -965,6 +986,46 @@ begin
         raise exception 'not allowed' using errcode = '42501';
     end if;
     delete from work.scan_feedback where wiki_id = p_wiki_id and match_key = p_match_key and user_id = auth.uid();
+end;
+$$;
+
+--
+-- Name: link_moved_templates(bigint[], text[]); Type: FUNCTION; Schema: derived; Owner: -
+--
+
+CREATE FUNCTION derived.link_moved_templates(p_page_ids bigint[], p_old_titles text[]) RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+declare
+    v_n integer;
+begin
+    with moved as (
+        select distinct u.page_id, mirror.title_key(u.old_title) as k
+        from unnest(p_page_ids, p_old_titles) as u(page_id, old_title)
+    ), target as (
+        select mv.page_id, mv.k
+        from moved mv
+        join mirror.wiki_page w on w.page_id = mv.page_id and mirror.title_key(w.title) <> mv.k
+        where not exists (select 1 from mirror.wiki_page o where mirror.title_key(o.title) = mv.k)
+          and (select count(distinct m2.page_id) from moved m2 where m2.k = mv.k) = 1
+    ), cand as (
+        select c.mech_id, t.page_id, c.template_title
+        from target t
+        join mirror.mech_page m on mirror.title_key(m.title) = t.k
+        join derived.template_check c on c.mech_id = m.page_id
+        where c.outcome = 'same' and mirror.title_key(c.template_title) = t.k
+          and not exists (select 1 from derived.template_link l where l.mech_id = c.mech_id)
+    ), linked as (
+        insert into derived.template_link (mech_id, wiki_id, template_ref, verified_at)
+        select mech_id, page_id, template_title, now() from cand
+        on conflict (mech_id) do nothing
+        returning mech_id
+    )
+    update derived.template_check c set outcome = 'ok'
+    from linked l where c.mech_id = l.mech_id;
+    get diagnostics v_n = row_count;
+    return v_n;
 end;
 $$;
 
@@ -1441,7 +1502,7 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
     s.names_count_s AS names_count_suggested,
         CASE
             WHEN (s.wiki_id IS NULL) THEN 'not_scanned'::text
-            WHEN (s.rev_id IS DISTINCT FROM w.latest_rev_id) THEN 'stale'::text
+            WHEN ((w.latest_rev_id IS NULL) OR (s.rev_id < w.latest_rev_id)) THEN 'stale'::text
             ELSE 'scanned'::text
         END AS scan_state
    FROM (((api.report_missing_from_mechalol m
@@ -1874,7 +1935,7 @@ CREATE VIEW api.v_missing WITH (security_invoker='true') AS
     s.scanned_at,
         CASE
             WHEN (s.wiki_id IS NULL) THEN 'not_scanned'::text
-            WHEN (s.rev_id IS DISTINCT FROM w.latest_rev_id) THEN 'stale'::text
+            WHEN ((w.latest_rev_id IS NULL) OR (s.rev_id < w.latest_rev_id)) THEN 'stale'::text
             ELSE 'scanned'::text
         END AS scan_state
    FROM (((derived.wiki_gap g
@@ -3093,6 +3154,13 @@ GRANT ALL ON FUNCTION api.template_pending(p_after bigint, p_limit integer) TO s
 REVOKE ALL ON FUNCTION api.unmark_feedback(p_wiki_id bigint, p_match_key text) FROM PUBLIC;
 GRANT ALL ON FUNCTION api.unmark_feedback(p_wiki_id bigint, p_match_key text) TO service_role;
 GRANT ALL ON FUNCTION api.unmark_feedback(p_wiki_id bigint, p_match_key text) TO authenticated;
+
+--
+-- Name: FUNCTION link_moved_templates(p_page_ids bigint[], p_old_titles text[]); Type: ACL; Schema: derived; Owner: -
+--
+
+REVOKE ALL ON FUNCTION derived.link_moved_templates(p_page_ids bigint[], p_old_titles text[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION derived.link_moved_templates(p_page_ids bigint[], p_old_titles text[]) TO service_role;
 
 --
 -- Name: FUNCTION refresh_wiki_gap(p_ids bigint[]); Type: ACL; Schema: derived; Owner: -
