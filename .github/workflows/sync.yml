@@ -1,4 +1,5 @@
 name: "1. עדכון שינויים מהאתרים"
+# אחרי סנכרון מוצלח שאינו dry-run, סורק את תוכן החסרים באותה נעילת v2-db-write.
 # מתוזמן כל 12 שעות, פעיל רק כש-ENABLE_SCHEDULE=true, וגם ידני. סף ההתראה: 15 שעות ללא הצלחה (0034).
 on:
   schedule:
@@ -31,5 +32,30 @@ jobs:
       - run: python -m collector.cli sync $FLAGS
         env:
           FLAGS: ${{ inputs.dry_run && '--dry-run' || '' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+  content_scan:
+    needs: sync
+    if: ${{ needs.sync.result == 'success' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      # Reuse the maintained engine and lists; do not fork a second copy in V2.
+      - uses: actions/checkout@v5
+        with:
+          repository: Chaim1222/database
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: בדיקות המנוע
+        run: node --test word-filter/tests/*.test.js
+      - name: סריקת החסרים (v2)
+        run: node word-filter/tools/scan-missing.js --backend v2
+        env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
