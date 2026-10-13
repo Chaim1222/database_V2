@@ -24,6 +24,6 @@ pg_dump "$DB_URL" --schema=work --data-only --no-owner -f work_backup.sql
 סטטוס: **בדיקת השחזור אוטומטית**: כל ריצה של `backup.yml` משחזרת את הקבצים שנשמרו (`ops/verify_backup.sh`) למסד Postgres 17 זמני שנבנה מהמיגרציות, ומשווה לספירות הייצור ול-`api.is_admin`. גיבוי שלא שוחזר בהצלחה מכשיל את הריצה.
 
 ## גיבוי אוטומטי (backup.yml)
-workflow שבועי ("גיבוי החלטות אדם") שומר כ-artifact (30 יום): `work_data.sql` (סכמת work, נתונים בלבד), `admins.csv` (מנהלים: מזהה, אימייל, תאריך) ו-`counts.txt` (ספירות לבדיקה).
+גיבוי שבועי (בתוך `אוטומטי 2`, וידני `ידני: גיבוי ובדיקת שחזור`) שומר כ-artifact (30 יום): `work_data.sql` (סכמת work, נתונים בלבד), `admins.csv` (מנהלים: מזהה, אימייל, תאריך) ו-`counts.txt` (ספירות לבדיקה).
 **בלי סיסמאות:** `auth.users` לא נשמר. בשחזור מקימים את חשבונות המנהלים מחדש ב-Authentication ורושמים את המזהים החדשים ב-`work.admin` לפי `admins.csv`; שורות `work.manual_link.created_by` ו-`work.scan_feedback.user_id` של מנהל שהוקם מחדש צריכות מיפוי (UPDATE) למזהה החדש.
 דורש secret `V2_DB_URL` (מחרוזת החיבור של סופרבייס, Session pooler). בבדיקת השחזור מוקמים ב-`auth.users` רק מזהי המנהלים מ-`admins.csv`, כמו בהקמה מחדש של חשבונות.

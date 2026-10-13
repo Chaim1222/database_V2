@@ -1,4 +1,4 @@
-name: "בדיקות אוטומטיות"
+name: "בדיקות קוד (בכל שינוי)"
 on:
   push:
     branches: [main]

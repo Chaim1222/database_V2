@@ -1,4 +1,4 @@
-name: "הוספת שינויי מסד"
+name: "ידני: החלת שינויי מסד"
 # מחיל מיגרציות שטרם הוחלו על המסד (ops/apply_migrations.sh). ברירת מחדל: בדיקה בלבד (apply=false) שמדווחת מה ממתין וסטייה.
 # מיגרציה עם `delete from` או DROP עלולה להיתקע דרך ה-MCP, אבל כאן החיבור ישיר ללא מגבלת 60 שניות.
 # דורש secret V2_DB_URL (Settings > Database > Connection string, מצב Session pooler).
