@@ -15,6 +15,7 @@ FETCH_BATCH = 50
 MAX_TITLE_BYTES = 255            # מגבלת כותרת ב-MediaWiki
 INVALID_TITLE_CHARS = set('[]{}|<>#')
 SEND_BATCH = 500
+UNAVAILABLE = "unavailable"      # גרסה בלי תוכן קריא: לא נכתבת תוצאה, הקודמת נשמרת
 # קשר בתבנית מוכיח קיום גם בערך מקומי; אינו משנה סיווג או היקף משימות גרסה.
 TEMPLATE_STATUSES = {"imported_documented", "imported_undocumented", "created_in_mech"}
 
@@ -106,7 +107,10 @@ def referenced_title(text):
 
 
 def fetch_contents(mw, page_ids):
-    """{page_id: {rev_id, content} | "denied" | None (לא קיים)}. אצווה שנדחתה מפוצלת עד לבידוד הדף הנעול."""
+    """
+    {page_id: {rev_id, content} | "denied" | UNAVAILABLE | None (לא קיים)}. אצווה שנדחתה מפוצלת עד לבידוד הדף הנעול.
+    גרסה בלי תוכן (מוסתר או חסר) היא UNAVAILABLE: אין מידע, לא "אין תבנית". תשובה שאינה מכסה דף שנשאל נכשלת.
+    """
     result = {pid: None for pid in page_ids}
     try:
         data = mw.get({"action": "query", "pageids": "|".join(map(str, page_ids)), "prop": "revisions",
@@ -121,12 +125,19 @@ def fetch_contents(mw, page_ids):
         result.update(fetch_contents(mw, page_ids[:mid]))
         result.update(fetch_contents(mw, page_ids[mid:]))
         return result
+    seen = set()
     for page in data["query"]["pages"]:
+        seen.add(page.get("pageid"))
         revisions = page.get("revisions") or []
-        if page.get("missing") or not revisions:
+        if page.get("missing"):
             continue
+        if not revisions:
+            raise RuntimeError(f"המקור לא החזיר גרסה עבור הדף {page.get('pageid')}")
         rev = revisions[0]
-        result[page["pageid"]] = {"rev_id": rev["revid"], "content": rev.get("slots", {}).get("main", {}).get("content", "")}
+        content = rev.get("slots", {}).get("main", {}).get("content")
+        result[page["pageid"]] = {"rev_id": rev["revid"], "content": content} if isinstance(content, str) else UNAVAILABLE
+    if not set(page_ids) <= seen:
+        raise RuntimeError(f"תשובת תוכן חלקית: {sorted(set(page_ids) - seen)[:5]}")
     return result
 
 
@@ -166,6 +177,9 @@ def check_pages(mech_mw, wiki_mw, titles_by_id, page_ids):
             continue  # הערך נעלם בין ההחלה לבדיקה: הסנכרון הבא יטפל
         if item == "denied":
             rows.append({"mech_id": mech_id, "outcome": "denied"})
+            continue
+        if item == UNAVAILABLE:
+            print(f"תבניות: לדף {mech_id} אין תוכן קריא בגרסה האחרונה; התוצאה הקודמת נשמרת", flush=True)
             continue
         parsed = parse_template(item["content"]) or {"title": None, "rev": None}
         ref = parsed["title"]

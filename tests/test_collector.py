@@ -408,6 +408,33 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(len(rows[1]["template_ref"]), 200)
         self.assertEqual(wiki.calls, [])
 
+    def test_hidden_content_is_not_no_template(self):
+        """גרסה בלי תוכן (texthidden) אינה "אין תבנית": לא נכתבת שורה והתוצאה הקודמת נשמרת; שאר הדפים נבדקים."""
+        from collector.templates import check_pages, fetch_contents
+
+        class Mw:
+            def get(self, params):
+                return {"query": {"pages": [
+                    {"pageid": 1, "revisions": [{"revid": 10, "slots": {"main": {"texthidden": True}}}]},
+                    {"pageid": 2, "revisions": [{"revid": 20, "slots": {"main": {"content": "אין תבנית"}}}]}]}}
+
+        rows = check_pages(Mw(), self._mw({}), {1: "א", 2: "ב"}, [1, 2])
+        self.assertEqual([(r["mech_id"], r["outcome"]) for r in rows], [(2, "none")])
+
+        class Partial:
+            def get(self, params):
+                return {"query": {"pages": [{"pageid": 1, "missing": True}]}}
+
+        with self.assertRaises(RuntimeError):   # דף שנשאל ולא הוחזר: אין מידע, לא "נעלם"
+            fetch_contents(Partial(), [1, 2])
+
+        class NoRevision:
+            def get(self, params):
+                return {"query": {"pages": [{"pageid": 1}]}}
+
+        with self.assertRaises(RuntimeError):
+            fetch_contents(NoRevision(), [1])
+
     def test_long_requests_use_post(self):
         from collector.mw import MediaWiki
 
