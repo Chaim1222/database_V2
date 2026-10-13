@@ -1,6 +1,6 @@
 name: "1. עדכון שינויים מהאתרים"
-# אחרי סנכרון מוצלח שאינו dry-run, סורק את תוכן החסרים באותה נעילת v2-db-write. בסוף: התראה על כשל (באותה ריצה).
-# מתוזמן כל 12 שעות, פעיל רק כש-ENABLE_SCHEDULE=true, וגם ידני. סף ההתראה: 15 שעות ללא הצלחה (0034).
+# הריצה המרכזית, פעמיים ביום: סנכרון, העשרת החסרים, בדיקת בריאות, ואחריהם סריקת התוכן. בסוף: התראה על כשל (באותה ריצה).
+# תזמון: אחד משלושה בלבד (sync פעמיים ביום, reconcile שבועי עם הגיבוי, revcheck חודשי). פעיל רק כש-ENABLE_SCHEDULE=true.
 on:
   schedule:
     - cron: "17 3,15 * * *"
@@ -23,7 +23,9 @@ jobs:
   sync:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 90
+    outputs:
+      synced: ${{ steps.sync.outcome }}   # הסריקה תלויה בסנכרון, לא בהעשרה
     env:
       PYTHONUNBUFFERED: "1"   # כדי שהלוג יתקדם בזמן אמת
     steps:
@@ -33,15 +35,28 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m collector.cli sync $FLAGS
+      - id: sync
+        run: python -m collector.cli sync $FLAGS
         env:
           FLAGS: ${{ inputs.dry_run && '--dry-run' || '' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - name: העשרת החסרים
+        if: ${{ steps.sync.outcome == 'success' && !inputs.dry_run }}
+        run: python -m collector.cli enrich
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - name: בדיקת בריאות
+        if: ${{ !cancelled() && !inputs.dry_run }}
+        run: python -m collector.cli health
+        env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
   content_scan:
     needs: sync
-    if: ${{ needs.sync.result == 'success' && !inputs.dry_run }}
+    if: ${{ !cancelled() && needs.sync.outputs.synced == 'success' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:

@@ -43,10 +43,22 @@ begin
     if not exists (select 1 from derived.wiki_gap where wiki_id = 2 and kind = 'missing') then raise exception 'ambiguous move should stay missing'; end if;
     if exists (select 1 from derived.wiki_gap where wiki_id = 3) then raise exception 'new page with the old title is covered by title'; end if;
 
-    -- 5. בלי תבנית (כותרת בלבד): הכלל לא השתנה, הדף שהועבר חסר
+    -- 5. בלי תבנית (כותרת בלבד, 0041): גם הוא מקושר לפי מזהה ולא יוצא חסר; outcome נשאר none
     perform api.sync_apply_wiki_pages('[{"page_id":4,"title":"ג חדש","latest_rev_id":401}]');
-    if not exists (select 1 from derived.wiki_gap where wiki_id = 4 and kind = 'missing') then raise exception 'title-only rule changed'; end if;
-    if exists (select 1 from derived.template_link where mech_id = 12) then raise exception 'title-only page linked'; end if;
+    if exists (select 1 from derived.wiki_gap where wiki_id = 4) then raise exception 'title-only page became missing'; end if;
+    if not exists (select 1 from derived.template_link where mech_id = 12 and wiki_id = 4 and template_ref = 'ג') then
+        raise exception 'title-only rename link not stored'; end if;
+    if (select outcome from derived.template_check where mech_id = 12) <> 'none' then raise exception 'title-only outcome changed'; end if;
+    -- בדיקה חוזרת (עדיין בלי תבנית, עדיין בשם הקודם): הקישור נשמר
+    perform api.sync_apply_template_checks('[{"mech_id":12,"outcome":"none","rev_id":12,"template_rev":0}]');
+    if not exists (select 1 from derived.template_link where mech_id = 12 and wiki_id = 4) or exists (select 1 from derived.wiki_gap where wiki_id = 4) then
+        raise exception 'none recheck dropped the rename link'; end if;
+    if (select outcome from derived.template_check where mech_id = 12) <> 'none' then raise exception 'none recheck outcome'; end if;
+    -- הערך הועבר במכלול לשם אחר: הקישור לשם הקודם כבר לא חל
+    perform api.sync_apply_mech_pages('[{"page_id":12,"title":"ג אחר","status":"imported_undocumented"}]');
+    perform api.sync_apply_template_checks('[{"mech_id":12,"outcome":"none","rev_id":13,"template_rev":0}]');
+    if exists (select 1 from derived.template_link where mech_id = 12) then raise exception 'stale title-only link kept'; end if;
+    if not exists (select 1 from derived.wiki_gap where wiki_id = 4 and kind = 'missing') then raise exception 'unlinked page should be missing'; end if;
 
     -- 6. הערך הועבר במכלול והתבנית עודכנה לשם החדש: הקישור הישן מוסר, הכיסוי לפי כותרת
     perform api.sync_apply_mech_pages('[{"page_id":10,"title":"שם חדש","status":"imported_documented"}]');
@@ -99,7 +111,7 @@ begin
     if has_function_privilege('anon', 'derived.link_moved_templates(bigint[], text[])', 'execute')
        or has_function_privilege('authenticated', 'derived.link_moved_templates(bigint[], text[])', 'execute') then
         raise exception 'internal function exposed'; end if;
-    if not exists (select 1 from ops.schema_migration where version = '0040') then raise exception '0040 not recorded'; end if;
+    if not exists (select 1 from ops.schema_migration where version = '0040') or not exists (select 1 from ops.schema_migration where version = '0041') then raise exception '0040/0041 not recorded'; end if;
 end $$;
 rollback;
 select 'ok t34_rename_identity';

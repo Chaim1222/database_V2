@@ -709,22 +709,26 @@ begin
         raise exception 'duplicate mech_id in p_rows' using errcode = '22023';
     end if;
 
-    -- same לאותו שם בתבנית שכבר קושר דרך העברה (derived.link_moved_templates): הקישור לפי מזהה נשמר
+    -- קישור דרך העברה (derived.link_moved_templates) נשמר כשהבדיקה החוזרת קוראת את אותו שם:
+    -- same לאותו שם בתבנית (הופך ל-ok), או none לערך שעדיין נושא את השם הקודם (נשאר none, הקישור נשמר)
     create temp table _tc as
     select r.mech_id, r.rev_id, coalesce(r.template_ref, keep.template_ref) as template_ref, r.template_rev, r.template_title,
-           case when keep.wiki_id is not null then 'ok'
+           case when keep.wiki_id is not null and r.outcome = 'same' then 'ok'
                 when r.outcome = 'ok' and not exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
                 then 'unresolved' else r.outcome end as outcome,
            case when keep.wiki_id is not null then keep.wiki_id
                 when r.outcome = 'ok' and exists (select 1 from mirror.wiki_page w where w.page_id = r.wiki_id)
-                then r.wiki_id end as wiki_id
+                then r.wiki_id end as wiki_id,
+           keep.wiki_id is not null as keep_link
     from jsonb_to_recordset(p_rows) as r(mech_id bigint, outcome text, rev_id bigint, wiki_id bigint, template_ref text, template_rev bigint, template_title text)
     left join lateral (
         select t.wiki_id, t.template_ref
         from derived.template_link t
         join mirror.wiki_page w on w.page_id = t.wiki_id
-        where r.outcome = 'same' and t.mech_id = r.mech_id
-          and mirror.title_key(t.template_ref) = mirror.title_key(r.template_title)
+        join mirror.mech_page m on m.page_id = r.mech_id
+        where t.mech_id = r.mech_id
+          and ((r.outcome = 'same' and mirror.title_key(t.template_ref) = mirror.title_key(r.template_title))
+               or (r.outcome = 'none' and mirror.title_key(t.template_ref) = mirror.title_key(m.title)))
     ) keep on true;
 
     select coalesce(array_agg(t.wiki_id), '{}') into v_old
@@ -741,10 +745,10 @@ begin
 
     delete from derived.template_link t
     using _tc c
-    where t.mech_id = c.mech_id and c.outcome in ('none', 'same');
+    where t.mech_id = c.mech_id and c.outcome in ('none', 'same');   -- קישור שנשמר מוכנס מחדש מיד אחרי (keep_link)
 
     insert into derived.template_link as t (mech_id, wiki_id, template_ref, verified_at)
-    select mech_id, wiki_id, template_ref, now() from _tc where outcome in ('ok', 'unresolved')
+    select mech_id, wiki_id, template_ref, now() from _tc where outcome in ('ok', 'unresolved') or keep_link
     on conflict (mech_id) do update
         set wiki_id = excluded.wiki_id, template_ref = excluded.template_ref, verified_at = now();
 
@@ -1001,30 +1005,33 @@ declare
     v_n integer;
 begin
     with moved as (
-        select distinct u.page_id, mirror.title_key(u.old_title) as k
+        select distinct u.page_id, mirror.title_key(u.old_title) as k, u.old_title
         from unnest(p_page_ids, p_old_titles) as u(page_id, old_title)
     ), target as (
-        select mv.page_id, mv.k
+        select mv.page_id, mv.k, min(mv.old_title) as old_title
         from moved mv
         join mirror.wiki_page w on w.page_id = mv.page_id and mirror.title_key(w.title) <> mv.k
         where not exists (select 1 from mirror.wiki_page o where mirror.title_key(o.title) = mv.k)
           and (select count(distinct m2.page_id) from moved m2 where m2.k = mv.k) = 1
+        group by mv.page_id, mv.k
     ), cand as (
-        select c.mech_id, t.page_id, c.template_title
+        select m.page_id as mech_id, t.page_id, coalesce(c.template_title, t.old_title) as ref
         from target t
         join mirror.mech_page m on mirror.title_key(m.title) = t.k
-        join derived.template_check c on c.mech_id = m.page_id
-        where c.outcome = 'same' and mirror.title_key(c.template_title) = t.k
-          and not exists (select 1 from derived.template_link l where l.mech_id = c.mech_id)
+        left join derived.template_check c on c.mech_id = m.page_id
+        where (c.mech_id is null or c.outcome = 'none'
+               or (c.outcome = 'same' and mirror.title_key(c.template_title) = t.k))
+          and not exists (select 1 from derived.template_link l where l.mech_id = m.page_id)
     ), linked as (
         insert into derived.template_link (mech_id, wiki_id, template_ref, verified_at)
-        select mech_id, page_id, template_title, now() from cand
+        select mech_id, page_id, ref, now() from cand
         on conflict (mech_id) do nothing
         returning mech_id
+    ), promoted as (
+        update derived.template_check c set outcome = 'ok'
+        from linked l where c.mech_id = l.mech_id and c.outcome = 'same'
     )
-    update derived.template_check c set outcome = 'ok'
-    from linked l where c.mech_id = l.mech_id;
-    get diagnostics v_n = row_count;
+    select count(*) into v_n from linked;
     return v_n;
 end;
 $$;
