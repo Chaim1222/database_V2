@@ -1,5 +1,5 @@
 name: "1. עדכון שינויים מהאתרים"
-# אחרי סנכרון מוצלח שאינו dry-run, סורק את תוכן החסרים באותה נעילת v2-db-write.
+# אחרי סנכרון מוצלח שאינו dry-run, סורק את תוכן החסרים באותה נעילת v2-db-write. בסוף: התראה על כשל (באותה ריצה).
 # מתוזמן כל 12 שעות, פעיל רק כש-ENABLE_SCHEDULE=true, וגם ידני. סף ההתראה: 15 שעות ללא הצלחה (0034).
 on:
   schedule:
@@ -14,6 +14,10 @@ on:
 concurrency:
   group: v2-db-write
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   sync:
@@ -59,3 +63,16 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+  alert:
+    needs: [sync, content_scan]
+    if: ${{ always() && needs.sync.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/alert
+        with:
+          status: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}

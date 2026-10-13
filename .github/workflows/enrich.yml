@@ -1,6 +1,6 @@
 name: "3. השלמת פרטים לערכים החסרים"
 # מתוזמן (פעיל רק כש-ENABLE_SCHEDULE=true) וגם ידני. מריץ את כל קבוצות ההעשרה (redirect, length, desc, created) על דפי ויקיפדיה "חסרים" שטרם נבדקו או התיישנו.
-# דורש את מיגרציה 0015. אחרי יציבות: schedule לילי.
+# בסוף: בדיקת בריאות (סנכרון שלא הצליח 15 שעות, ריצה תקועה, נפח) - במקום health.yml השעתי - והתראה על כשל.
 on:
   schedule:
     - cron: "37 1 * * *"
@@ -14,6 +14,10 @@ on:
 concurrency:
   group: v2-db-write
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   enrich:
@@ -34,4 +38,14 @@ jobs:
           ENRICH_GROUPS: ${{ inputs.groups }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - name: בדיקת בריאות
+        if: ${{ !cancelled() }}
+        run: python -m collector.cli health
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - if: always()
+        uses: ./.github/actions/alert
+        with:
+          status: ${{ job.status }}
 

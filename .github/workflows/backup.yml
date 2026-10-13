@@ -2,11 +2,16 @@ name: "גיבוי החלטות אדם (שבועי)"
 # גיבוי לוגי של מה שאי אפשר לבנות מחדש: סכמת work (שיוכים, החרגות, נעילות, משובי סינון, מנהלים) ורשימת המנהלים עם האימייל שלהם.
 # שאר הנתונים נבנים מהמקורות (טעינה ראשונה / rebuild). נשמר כ-artifact ל-30 יום. בלי סיסמאות: טבלת auth.users לא נשמרת.
 # דורש secret V2_DB_URL (Supabase, Project Settings, Database, Connection string, "Session pooler", עם הסיסמה).
-# מתוזמן רק כש-ENABLE_SCHEDULE=true. נוהל השחזור: ops/BACKUP_RESTORE.md
+# אחרי הגיבוי: שחזור הקבצים שנשמרו למסד Postgres 17 זמני בתוך ה-runner והשוואה לספירות הייצור (ops/verify_backup.sh).
+# גיבוי שלא שוחזר בהצלחה נכשל. מתוזמן רק כש-ENABLE_SCHEDULE=true. נוהל השחזור: ops/BACKUP_RESTORE.md
 on:
   schedule:
     - cron: "11 5 * * 0"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   backup:
@@ -14,13 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: התקנת לקוח Postgres 17
+      - uses: actions/checkout@v5
+      - name: התקנת Postgres 17 (לקוח לגיבוי, שרת לבדיקת השחזור)
         run: |
           # מאגר Ubuntu כולל רק 16, ו-pg_dump מסרב לשרת 17 (version mismatch): מוסיפים את מאגר PGDG הרשמי
           sudo apt-get update -q
           sudo apt-get install -y -q postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -q postgresql-client-17
+          sudo apt-get install -y -q postgresql-client-17 postgresql-17
+          sudo pg_ctlcluster 17 main start
+          # הפורט של אשכול 17 תלוי במה שכבר מותקן ב-runner: נקרא בפועל ולא מנוחש
+          PG17_PORT=$(pg_lsclusters -h | awk '$1 == "17" {print $3}')
+          echo "PGPORT=$PG17_PORT" >> "$GITHUB_ENV"
+          sudo -u postgres createuser -p "$PG17_PORT" --superuser "$USER"
           # /usr/bin/pg_dump הוא עטיפה שבוחרת 16; מצביעים ישירות על 17
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           /usr/lib/postgresql/17/bin/pg_dump --version
@@ -41,3 +52,11 @@ jobs:
           name: v2-work-backup
           path: out/
           retention-days: 30
+      - name: בדיקת שחזור
+        run: ops/verify_backup.sh out
+        env:
+          PGHOST: /var/run/postgresql
+      - if: always()
+        uses: ./.github/actions/alert
+        with:
+          status: ${{ job.status }}

@@ -8,6 +8,10 @@ concurrency:
   group: v2-db-write
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   templates:
     runs-on: ubuntu-latest
@@ -25,3 +29,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - if: always()
+        uses: ./.github/actions/alert
+        with:
+          status: ${{ job.status }}
