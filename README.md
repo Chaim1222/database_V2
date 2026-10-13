@@ -3,6 +3,7 @@
 כתיבה מחדש של המסד, הצינורות והדשבורד, אחרי הלמידה על המערכת הקודמת (`Chaim1222/database`).
 
 - **תכנון:** [`DESIGN.md`](DESIGN.md) (צרכים, עקרונות, מודל נתונים, סנכרון והוכחה, חוזים פתוחים בסעיף 12) ו-[`PLAN_STAGE4.md`](PLAN_STAGE4.md).
+- **המצב הנוכחי:** [`STATUS.md`](STATUS.md) (מקור יחיד: מה מוחל, מה בענף, מה פתוח).
 - **מעבר מהמערכת הישנה:** [`CUTOVER.md`](CUTOVER.md): סדר ההחלות וההרצות, ומה עדיין לא קיים.
 - **כללי עבודה:** [`CLAUDE.md`](CLAUDE.md).
 - **פרויקט סופרבייס:** `ukzijtrpchvmoxlslxpz` (`ap-southeast-2`).
@@ -15,7 +16,6 @@
 | `db/tests/` | בדיקות SQL (הרצה חוזרת, אטומיות, הרשאות, views, שחזור) |
 | `db/perf/` | מדידות קנה מידה (`run_scale.sh`, `SCALE_SCRIPT=apply_scale.sql`, `sizes.sql`) |
 | `collector/` | Python: `sync`, `load` (דמפ), `rebuild`, `templates`, `enrich`, `revcheck`, `reconcile`, `health`, `maintenance`, `import_v1` |
-| `dashboard/` | דשבורד חדש: `src/` (מודולים), `build.js`, `dist/gadget-dashboard.js` (הקובץ להעתקה לוויקי), `tests/` |
 | `ops/` | נוהל גיבוי ושחזור והדמיה מקומית שלו; `apply_migrations.sh` |
 
 תקלות: `RUNBOOK.md`. תוכנית מעבר: `CUTOVER.md`.
@@ -28,8 +28,6 @@
 ```
 db/run_tests.sh                       # מיגרציות + בדיקות SQL על Postgres 16 מקומי (מסד זמני)
 python3 -m unittest discover -s tests # הקולקטור
-node --test dashboard/tests/unit.test.js
-node dashboard/build.js && node dashboard/tests/browser.test.js   # דורש playwright + Chromium
 ```
 
 בסביבת הענן: `pg_ctlcluster 16 main start` לפני בדיקות ה-SQL.
