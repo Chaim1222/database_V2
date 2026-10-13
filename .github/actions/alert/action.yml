@@ -1,0 +1,34 @@
+name: "התראה על כשל"
+# שלב אחרון בכל workflow מתוזמן (במקום alert.yml, שרץ כריצה נפרדת אחרי כל ריצה, גם מוצלחת).
+# כשל: נפתח Issue עם התווית alert (או מתווספת תגובה לפתוח של אותו workflow), ו-GitHub שולח מייל.
+# הצלחה: Issue פתוח של אותו workflow נסגר. דורש permissions: issues: write.
+description: "פותח או סוגר Issue לפי תוצאת הריצה"
+inputs:
+  status:
+    description: "job.status"
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      env:
+        STATUS: ${{ inputs.status }}
+      with:
+        script: |
+          const failed = process.env.STATUS !== "success";
+          const title = `נכשל: ${context.workflow}`;
+          const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const open = await github.paginate(github.rest.issues.listForRepo, {
+            ...context.repo, state: "open", labels: "alert", per_page: 100,
+          });
+          const existing = open.find(i => i.title === title);
+          if (!failed) {
+            if (existing) {
+              await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body: `הריצה הבאה הצליחה: ${url}. סוגר.`});
+              await github.rest.issues.update({...context.repo, issue_number: existing.number, state: "closed", state_reason: "completed"});
+            }
+            return;
+          }
+          const body = `הריצה נכשלה: ${url}\nאירוע: ${context.eventName}`;
+          if (existing) await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body});
+          else await github.rest.issues.create({...context.repo, title, body, labels: ["alert"]});

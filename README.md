@@ -19,7 +19,7 @@
 | `ops/` | נוהל גיבוי ושחזור והדמיה מקומית שלו; `apply_migrations.sh` |
 
 תקלות: `RUNBOOK.md`. תוכנית מעבר: `CUTOVER.md`.
-| `.github/workflows/` | `sync`, `enrich`, `reconcile`, `revcheck`, `maintenance`, `health`, `load`, `rebuild`, `templates`, `import_v1`, `ci`, `alert` (Issue בכשל), `smoke` (בדיקת עשן שבועית), `migrate` (הוספת מיגרציות), `backup`, `chain` |
+| `.github/workflows/` | מתוזמנים: `sync` (פעמיים ביום, כולל סריקת תוכן), `enrich` (יומי, כולל בדיקת בריאות), `reconcile` (שבועי, כולל ניקיון), `backup` (שבועי, כולל בדיקת שחזור), `revcheck` (חודשי). ידניים: `chain`, `templates`, `rebuild`, `migrate`. `ci`. התראה על כשל: `.github/actions/alert`, שלב אחרון באותה ריצה |
 
 המנוע של סינון התוכן (`word-filter/`) נשאר בריפו הישן; `scan-missing.js --backend v2` כותב משם למסד הזה.
 

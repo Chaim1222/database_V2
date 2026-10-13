@@ -12,6 +12,10 @@ concurrency:
   group: v2-db-write
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   rebuild:
     if: ${{ inputs.confirm == 'rebuild' }}
@@ -30,3 +34,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - if: always()
+        uses: ./.github/actions/alert
+        with:
+          status: ${{ job.status }}

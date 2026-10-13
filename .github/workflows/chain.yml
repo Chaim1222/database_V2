@@ -12,6 +12,10 @@ on:
         options: ["2", "3", "4", "5"]
         default: "2"
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   templates:
     if: ${{ inputs.start_from == '2' }}

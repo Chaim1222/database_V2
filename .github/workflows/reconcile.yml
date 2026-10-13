@@ -1,6 +1,6 @@
 name: "5. השוואה מלאה מול האתרים"
 # צילום מקור מול המראה בחלון סגור; דוח וממצאים. במצב fix מתקנים רק סיווג בשער הקיים ובודקים מחדש; פער לא מוסבר שנותר מכשיל. ההפעלה הידנית נשארת ללא תיקון כברירת מחדל.
-# ידני. דורש מיגרציה 0018 וטעינה ראשונית. צילום המכלול (עם קטגוריות) לוקח כ-40 דקות.
+# שבועי וגם ידני. צילום המכלול (עם קטגוריות) כ-40 דקות. אחריו הניקוי והחישוב מחדש (לשעבר maintenance.yml), גם כשנמצא פער.
 on:
   schedule:
     - cron: "13 3 * * 0"
@@ -24,6 +24,10 @@ concurrency:
   group: v2-db-write
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   reconcile:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true' }}
@@ -43,5 +47,13 @@ jobs:
           FLAGS: ${{ inputs.skip_mechalol && '--skip-mechalol' || '' }} ${{ (inputs.fix || github.event_name == 'schedule') && '--fix' || '' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          V1_SUPABASE_URL: ${{ secrets.V1_SUPABASE_URL }}
-          V1_SUPABASE_SERVICE_KEY: ${{ secrets.V1_SUPABASE_SERVICE_KEY }}
+      - name: ניקיון וחישוב מחדש
+        if: ${{ !cancelled() }}
+        run: python -m collector.cli maintenance
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - if: always()
+        uses: ./.github/actions/alert
+        with:
+          status: ${{ job.status }}
