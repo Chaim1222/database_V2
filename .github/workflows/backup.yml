@@ -5,8 +5,7 @@ name: "גיבוי החלטות אדם (שבועי)"
 # אחרי הגיבוי: שחזור הקבצים שנשמרו למסד Postgres 17 זמני בתוך ה-runner והשוואה לספירות הייצור (ops/verify_backup.sh).
 # גיבוי שלא שוחזר בהצלחה נכשל. מתוזמן רק כש-ENABLE_SCHEDULE=true. נוהל השחזור: ops/BACKUP_RESTORE.md
 on:
-  schedule:
-    - cron: "11 5 * * 0"
+  workflow_call:      # מתוך reconcile.yml, הריצה השבועית
   workflow_dispatch:
 
 permissions:
