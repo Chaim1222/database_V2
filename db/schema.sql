@@ -1526,7 +1526,9 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
     s.verdict_list_s AS verdict_suggested,
     s.has_images,
     s.photo_count,
-    d.counts,
+    ( SELECT d.counts
+           FROM api.word_filter_results d
+          WHERE (d.wikipedia_id = g.wiki_id)) AS counts,
     s.matches_total,
     NULL::jsonb AS images,
     s.scanned_at,
@@ -1546,11 +1548,10 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
             WHEN ((w.latest_rev_id IS NULL) OR (s.rev_id < w.latest_rev_id)) THEN 'stale'::text
             ELSE 'scanned'::text
         END AS scan_state
-   FROM ((((derived.wiki_gap g
+   FROM (((derived.wiki_gap g
      JOIN mirror.wiki_page w ON ((w.page_id = g.wiki_id)))
      LEFT JOIN enrich.wiki_enrichment e ON ((e.wiki_id = g.wiki_id)))
      LEFT JOIN enrich.content_scan s ON ((s.wiki_id = g.wiki_id)))
-     LEFT JOIN api.word_filter_results d ON ((d.wikipedia_id = g.wiki_id)))
   WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
            FROM work.exclusion x
           WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.wiki_id = g.wiki_id))))) AND (NOT (EXISTS ( SELECT 1
@@ -2612,6 +2613,12 @@ CREATE INDEX mech_page_rav_idx ON mirror.mech_page USING btree (mirror.rav_strip
 --
 
 CREATE INDEX mech_page_title_key_idx ON mirror.mech_page USING btree (mirror.title_key(title));
+
+--
+-- Name: mech_page_undocumented_idx; Type: INDEX; Schema: mirror; Owner: -
+--
+
+CREATE INDEX mech_page_undocumented_idx ON mirror.mech_page USING btree (page_id) WHERE (status = 'imported_undocumented'::text);
 
 --
 -- Name: page_event_page_idx; Type: INDEX; Schema: mirror; Owner: -
