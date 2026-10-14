@@ -1443,7 +1443,9 @@ CREATE VIEW api.report_missing_from_mechalol WITH (security_invoker='true') AS
      LEFT JOIN enrich.content_scan s ON ((s.wiki_id = g.wiki_id)))
   WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
            FROM work.exclusion x
-          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND ((x.wiki_id = w.page_id) OR (x.title = w.title)))))));
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.wiki_id = g.wiki_id))))) AND (NOT (EXISTS ( SELECT 1
+           FROM work.exclusion x
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.title = w.title))))));
 
 --
 -- Name: content_scan_detail; Type: TABLE; Schema: enrich; Owner: -
@@ -1481,13 +1483,13 @@ CREATE VIEW api.word_filter_results AS
 --
 
 CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
- SELECT m.id,
-    m.title,
-    m.checked_at,
-    m.wikidata_desc,
-    m.easy_import_length,
-    m.created_at,
-    m.mechalol_redirect_exists,
+ SELECT g.wiki_id AS id,
+    w.title,
+    e.desc_checked_at AS checked_at,
+    e.wikidata_desc,
+    e.length AS easy_import_length,
+    e.wiki_created_at AS created_at,
+    e.mech_redirect AS mechalol_redirect_exists,
     s.verdict_list_a AS verdict,
     s.verdict_list_s AS verdict_suggested,
     s.has_images,
@@ -1512,10 +1514,16 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
             WHEN ((w.latest_rev_id IS NULL) OR (s.rev_id < w.latest_rev_id)) THEN 'stale'::text
             ELSE 'scanned'::text
         END AS scan_state
-   FROM (((api.report_missing_from_mechalol m
-     JOIN mirror.wiki_page w ON ((w.page_id = m.id)))
-     LEFT JOIN enrich.content_scan s ON ((s.wiki_id = m.id)))
-     LEFT JOIN api.word_filter_results d ON ((d.wikipedia_id = m.id)));
+   FROM ((((derived.wiki_gap g
+     JOIN mirror.wiki_page w ON ((w.page_id = g.wiki_id)))
+     LEFT JOIN enrich.wiki_enrichment e ON ((e.wiki_id = g.wiki_id)))
+     LEFT JOIN enrich.content_scan s ON ((s.wiki_id = g.wiki_id)))
+     LEFT JOIN api.word_filter_results d ON ((d.wikipedia_id = g.wiki_id)))
+  WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM work.exclusion x
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.wiki_id = g.wiki_id))))) AND (NOT (EXISTS ( SELECT 1
+           FROM work.exclusion x
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.title = w.title))))));
 
 --
 -- Name: report_missing_word_filter_summary; Type: VIEW; Schema: api; Owner: -
@@ -1951,7 +1959,9 @@ CREATE VIEW api.v_missing WITH (security_invoker='true') AS
      LEFT JOIN enrich.content_scan s ON ((s.wiki_id = w.page_id)))
   WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
            FROM work.exclusion x
-          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND ((x.wiki_id = w.page_id) OR (x.title = w.title)))))));
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.wiki_id = w.page_id))))) AND (NOT (EXISTS ( SELECT 1
+           FROM work.exclusion x
+          WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.title = w.title))))));
 
 --
 -- Name: sync_run; Type: TABLE; Schema: ops; Owner: -
