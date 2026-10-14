@@ -58,7 +58,6 @@ def main(argv):
                 stats[group] = {"complete": False, "error_type": type(exc).__name__}
             if stats[group].get("complete") is False:
                 stats[group]["retry"] = f"python -m collector.cli enrich {group}"
-        rpc.call("maintenance_refresh_counts", {})   # סיכום "חסר" מחושב מראש (0043); בלי רענון נופל לחישוב החי עד הסנכרון הבא
         # All independent groups finish before reporting partial completion.
     elif argv[0] == "templates":
         stats = {"checked": run_pending(mws["mechalol"], mws["wikipedia"], rpc)}
@@ -70,6 +69,9 @@ def main(argv):
         if "wikipedia" in sources:
             print(f"דמפ ויקיפדיה: {sources['wikipedia'].date} ({sources['wikipedia'].url})")
         stats = run_initial_load(mws, rpc, sources=sources, prune=argv[0] == "rebuild")
+    if argv[0] in ("enrich", "templates", "revcheck"):   # sync, load ו-rebuild מרעננים ב-sync_run_finish
+        # המספרים השמורים (סיכום "חסר" מ-0043, משימות גרסה) - גם אחרי ריצה חלקית; בלי רענון הם נשארים עד הסנכרון הבא
+        rpc.call("maintenance_refresh_counts", {})
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return int(stats.get("complete") is False or any(
         isinstance(value, dict) and value.get("complete") is False for value in stats.values()))
