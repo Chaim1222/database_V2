@@ -91,9 +91,10 @@ class RecoveryTests(unittest.TestCase):
             calls.append(group)
             if group == 'length': raise RuntimeError('unavailable')
             return {'complete': True, 'done': 4}
-        with patch.dict(os.environ, {'SUPABASE_URL': 'fixture', 'SUPABASE_SERVICE_KEY': 'fixture'}), patch.object(cli, 'Rpc'), patch.object(cli, 'MediaWiki'), patch.object(cli, 'run_group', side_effect=run), contextlib.redirect_stdout(io.StringIO()) as out:
+        with patch.dict(os.environ, {'SUPABASE_URL': 'fixture', 'SUPABASE_SERVICE_KEY': 'fixture'}), patch.object(cli, 'Rpc') as rpc, patch.object(cli, 'MediaWiki'), patch.object(cli, 'run_group', side_effect=run), contextlib.redirect_stdout(io.StringIO()) as out:
             result = cli.main(['enrich', 'length', 'desc'])
         self.assertEqual(calls, ['length', 'desc'])
+        rpc.return_value.call.assert_called_once_with('maintenance_refresh_counts', {})   # גם אחרי כישלון חלקי: הסיכום השמור מתעדכן
         self.assertEqual(result, 1)
         self.assertIn('python -m collector.cli enrich length', out.getvalue())
 

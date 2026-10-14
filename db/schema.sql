@@ -1122,6 +1122,20 @@ CREATE FUNCTION mirror.title_key(t text) RETURNS text
 $$;
 
 --
+-- Name: bump_missing_summary(); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.bump_missing_summary() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+begin
+    update ops.missing_summary set gen = gen + 1;
+    return null;
+end;
+$$;
+
+--
 -- Name: health(); Type: FUNCTION; Schema: ops; Owner: -
 --
 
@@ -1150,22 +1164,40 @@ $$;
 --
 
 CREATE FUNCTION ops.refresh_counts() RETURNS void
-    LANGUAGE sql
+    LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+declare v_missing bigint := ops.refresh_missing_summary();
+begin
     insert into ops.dashboard_counts (key, n, updated_at)
     values
         ('wiki_pages', (select n from ops.mirror_count where key = 'wiki_pages'), now()),
         ('mech_pages', (select n from ops.mirror_count where key = 'mech_pages'), now()),
-        ('missing', (select count(*) from derived.wiki_gap g
-                     join mirror.wiki_page w on w.page_id = g.wiki_id
-                     where g.kind = 'missing'
-                       and not exists (select 1 from work.exclusion e where e.kind in ('import_excluded', 'locked_create') and e.wiki_id = g.wiki_id)
-                       and not exists (select 1 from work.exclusion e where e.kind in ('import_excluded', 'locked_create') and e.title = w.title)), now()),
+        ('missing', v_missing, now()),
         ('rav_review', (select count(*) from derived.wiki_gap where kind = 'rav_review'), now()),
         ('locks', (select count(*) from work.page_lock), now()),
         ('rev_tasks', (select count(*) from api.v_rev_tasks), now())
     on conflict (key) do update set n = excluded.n, updated_at = excluded.updated_at;
+end;
+$$;
+
+--
+-- Name: refresh_missing_summary(); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.refresh_missing_summary() RETURNS bigint
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+declare
+    g bigint;
+    r jsonb;
+begin
+    select gen into g from ops.missing_summary;
+    select coalesce(jsonb_agg(to_jsonb(l)), '[]') into r from ops.missing_summary_live l;
+    update ops.missing_summary set rows = r, built_gen = g, built_at = now();
+    return (select coalesce(sum((x ->> 'n')::bigint), 0) from jsonb_array_elements(r) x);
+end;
 $$;
 
 --
@@ -1526,66 +1558,140 @@ CREATE VIEW api.report_missing_word_filter WITH (security_invoker='true') AS
           WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.title = w.title))))));
 
 --
--- Name: report_missing_word_filter_summary; Type: VIEW; Schema: api; Owner: -
+-- Name: missing_summary; Type: TABLE; Schema: ops; Owner: -
 --
 
-CREATE VIEW api.report_missing_word_filter_summary WITH (security_invoker='true') AS
- SELECT COALESCE(mechalol_redirect_exists, false) AS redirect,
+CREATE TABLE ops.missing_summary (
+    id boolean DEFAULT true NOT NULL,
+    gen bigint DEFAULT 1 NOT NULL,
+    built_gen bigint DEFAULT 0 NOT NULL,
+    built_at timestamp with time zone,
+    rows jsonb DEFAULT '[]'::jsonb NOT NULL,
+    CONSTRAINT missing_summary_id_check CHECK (id)
+);
+
+--
+-- Name: missing_summary_live; Type: VIEW; Schema: ops; Owner: -
+--
+
+CREATE VIEW ops.missing_summary_live WITH (security_invoker='true') AS
+ SELECT COALESCE(mech_redirect, false) AS redirect,
     has_images,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN verdict
+            WHEN (scan_state = 'scanned'::text) THEN verdict_list_a
             ELSE NULL::text
         END AS verdict,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN verdict_suggested
+            WHEN (scan_state = 'scanned'::text) THEN verdict_list_s
             ELSE NULL::text
         END AS verdict_suggested,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict
+            WHEN (scan_state = 'scanned'::text) THEN verdict_ctx_a
             ELSE NULL::text
         END AS ctx_verdict,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion
+            WHEN (scan_state = 'scanned'::text) THEN suspicion_a
             ELSE NULL::text
         END AS ctx_suspicion,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict_suggested
+            WHEN (scan_state = 'scanned'::text) THEN verdict_ctx_s
             ELSE NULL::text
         END AS ctx_verdict_suggested,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion_suggested
+            WHEN (scan_state = 'scanned'::text) THEN suspicion_s
             ELSE NULL::text
         END AS ctx_suspicion_suggested,
     (dictionary IS NOT NULL) AS dictionary,
     topic,
     (count(*))::integer AS n,
     scan_state
-   FROM api.report_missing_word_filter
-  GROUP BY COALESCE(mechalol_redirect_exists, false), has_images,
+   FROM ( SELECT e.mech_redirect,
+            s.has_images,
+            s.verdict_list_a,
+            s.verdict_list_s,
+            s.verdict_ctx_a,
+            s.suspicion_a,
+            s.verdict_ctx_s,
+            s.suspicion_s,
+            s.dictionary,
+            s.topic,
+                CASE
+                    WHEN (s.wiki_id IS NULL) THEN 'not_scanned'::text
+                    WHEN ((w.latest_rev_id IS NULL) OR (s.rev_id < w.latest_rev_id)) THEN 'stale'::text
+                    ELSE 'scanned'::text
+                END AS scan_state
+           FROM (((derived.wiki_gap g
+             JOIN mirror.wiki_page w ON ((w.page_id = g.wiki_id)))
+             LEFT JOIN enrich.wiki_enrichment e ON ((e.wiki_id = g.wiki_id)))
+             LEFT JOIN enrich.content_scan s ON ((s.wiki_id = g.wiki_id)))
+          WHERE ((g.kind = 'missing'::text) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.exclusion x
+                  WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.wiki_id = g.wiki_id))))) AND (NOT (EXISTS ( SELECT 1
+                   FROM work.exclusion x
+                  WHERE ((x.kind = ANY (ARRAY['import_excluded'::text, 'locked_create'::text])) AND (x.title = w.title))))))) q
+  GROUP BY COALESCE(mech_redirect, false), has_images,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN verdict
+            WHEN (scan_state = 'scanned'::text) THEN verdict_list_a
             ELSE NULL::text
         END,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN verdict_suggested
+            WHEN (scan_state = 'scanned'::text) THEN verdict_list_s
             ELSE NULL::text
         END,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict
+            WHEN (scan_state = 'scanned'::text) THEN verdict_ctx_a
             ELSE NULL::text
         END,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion
+            WHEN (scan_state = 'scanned'::text) THEN suspicion_a
             ELSE NULL::text
         END,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_verdict_suggested
+            WHEN (scan_state = 'scanned'::text) THEN verdict_ctx_s
             ELSE NULL::text
         END,
         CASE
-            WHEN (scan_state = 'scanned'::text) THEN ctx_suspicion_suggested
+            WHEN (scan_state = 'scanned'::text) THEN suspicion_s
             ELSE NULL::text
         END, (dictionary IS NOT NULL), topic, scan_state;
+
+--
+-- Name: report_missing_word_filter_summary; Type: VIEW; Schema: api; Owner: -
+--
+
+CREATE VIEW api.report_missing_word_filter_summary WITH (security_invoker='true') AS
+ SELECT r.redirect,
+    r.has_images,
+    r.verdict,
+    r.verdict_suggested,
+    r.ctx_verdict,
+    r.ctx_suspicion,
+    r.ctx_verdict_suggested,
+    r.ctx_suspicion_suggested,
+    r.dictionary,
+    r.topic,
+    r.n,
+    r.scan_state
+   FROM (ops.missing_summary m
+     CROSS JOIN LATERAL jsonb_to_recordset(m.rows) r(redirect boolean, has_images boolean, verdict text, verdict_suggested text, ctx_verdict text, ctx_suspicion text, ctx_verdict_suggested text, ctx_suspicion_suggested text, dictionary boolean, topic text, n integer, scan_state text))
+  WHERE (m.built_gen = m.gen)
+UNION ALL
+ SELECT l.redirect,
+    l.has_images,
+    l.verdict,
+    l.verdict_suggested,
+    l.ctx_verdict,
+    l.ctx_suspicion,
+    l.ctx_verdict_suggested,
+    l.ctx_suspicion_suggested,
+    l.dictionary,
+    l.topic,
+    l.n,
+    l.scan_state
+   FROM ops.missing_summary_live l
+  WHERE (NOT (EXISTS ( SELECT 1
+           FROM ops.missing_summary m
+          WHERE (m.built_gen = m.gen))));
 
 --
 -- Name: manual_link; Type: TABLE; Schema: work; Owner: -
@@ -2356,6 +2462,13 @@ ALTER TABLE ONLY ops.mirror_count
     ADD CONSTRAINT mirror_count_pkey PRIMARY KEY (key);
 
 --
+-- Name: missing_summary missing_summary_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
+--
+
+ALTER TABLE ONLY ops.missing_summary
+    ADD CONSTRAINT missing_summary_pkey PRIMARY KEY (id);
+
+--
 -- Name: reconcile_finding reconcile_finding_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
 --
 
@@ -2543,6 +2656,24 @@ CREATE UNIQUE INDEX exclusion_title_idx ON work.exclusion USING btree (kind, tit
 CREATE UNIQUE INDEX exclusion_wiki_idx ON work.exclusion USING btree (kind, wiki_id) WHERE (wiki_id IS NOT NULL);
 
 --
+-- Name: wiki_gap missing_summary_gen; Type: TRIGGER; Schema: derived; Owner: -
+--
+
+CREATE TRIGGER missing_summary_gen AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON derived.wiki_gap FOR EACH STATEMENT EXECUTE FUNCTION ops.bump_missing_summary();
+
+--
+-- Name: content_scan missing_summary_gen; Type: TRIGGER; Schema: enrich; Owner: -
+--
+
+CREATE TRIGGER missing_summary_gen AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON enrich.content_scan FOR EACH STATEMENT EXECUTE FUNCTION ops.bump_missing_summary();
+
+--
+-- Name: wiki_enrichment missing_summary_gen; Type: TRIGGER; Schema: enrich; Owner: -
+--
+
+CREATE TRIGGER missing_summary_gen AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON enrich.wiki_enrichment FOR EACH STATEMENT EXECUTE FUNCTION ops.bump_missing_summary();
+
+--
 -- Name: mech_page mech_count_delete; Type: TRIGGER; Schema: mirror; Owner: -
 --
 
@@ -2555,6 +2686,12 @@ CREATE TRIGGER mech_count_delete AFTER DELETE ON mirror.mech_page REFERENCING OL
 CREATE TRIGGER mech_count_insert AFTER INSERT ON mirror.mech_page REFERENCING NEW TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
 
 --
+-- Name: wiki_page missing_summary_gen; Type: TRIGGER; Schema: mirror; Owner: -
+--
+
+CREATE TRIGGER missing_summary_gen AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON mirror.wiki_page FOR EACH STATEMENT EXECUTE FUNCTION ops.bump_missing_summary();
+
+--
 -- Name: wiki_page wiki_count_delete; Type: TRIGGER; Schema: mirror; Owner: -
 --
 
@@ -2565,6 +2702,18 @@ CREATE TRIGGER wiki_count_delete AFTER DELETE ON mirror.wiki_page REFERENCING OL
 --
 
 CREATE TRIGGER wiki_count_insert AFTER INSERT ON mirror.wiki_page REFERENCING NEW TABLE AS changed_rows FOR EACH STATEMENT EXECUTE FUNCTION ops.track_mirror_count();
+
+--
+-- Name: exclusion exclusion_gen; Type: TRIGGER; Schema: work; Owner: -
+--
+
+CREATE TRIGGER exclusion_gen AFTER INSERT OR DELETE OR UPDATE ON work.exclusion FOR EACH ROW EXECUTE FUNCTION ops.bump_missing_summary();
+
+--
+-- Name: exclusion exclusion_gen_truncate; Type: TRIGGER; Schema: work; Owner: -
+--
+
+CREATE TRIGGER exclusion_gen_truncate AFTER TRUNCATE ON work.exclusion FOR EACH STATEMENT EXECUTE FUNCTION ops.bump_missing_summary();
 
 --
 -- Name: exclusion exclusion_refresh; Type: TRIGGER; Schema: work; Owner: -
@@ -2764,6 +2913,12 @@ ALTER TABLE ops.metric_snapshot ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ops.mirror_count ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: missing_summary; Type: ROW SECURITY; Schema: ops; Owner: -
+--
+
+ALTER TABLE ops.missing_summary ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: dashboard_counts public_read; Type: POLICY; Schema: ops; Owner: -
 --
 
@@ -2780,6 +2935,12 @@ CREATE POLICY public_read ON ops.health_threshold FOR SELECT TO anon, authentica
 --
 
 CREATE POLICY public_read ON ops.metric_snapshot FOR SELECT TO anon, authenticated USING (true);
+
+--
+-- Name: missing_summary public_read; Type: POLICY; Schema: ops; Owner: -
+--
+
+CREATE POLICY public_read ON ops.missing_summary FOR SELECT TO anon, authenticated USING (true);
 
 --
 -- Name: reconcile_run public_read; Type: POLICY; Schema: ops; Owner: -
@@ -3198,6 +3359,13 @@ GRANT ALL ON FUNCTION mirror.rav_strip(k text) TO service_role;
 GRANT ALL ON FUNCTION mirror.title_key(t text) TO service_role;
 
 --
+-- Name: FUNCTION bump_missing_summary(); Type: ACL; Schema: ops; Owner: -
+--
+
+REVOKE ALL ON FUNCTION ops.bump_missing_summary() FROM PUBLIC;
+GRANT ALL ON FUNCTION ops.bump_missing_summary() TO service_role;
+
+--
 -- Name: FUNCTION health(); Type: ACL; Schema: ops; Owner: -
 --
 
@@ -3210,6 +3378,13 @@ GRANT ALL ON FUNCTION ops.health() TO authenticated;
 --
 
 GRANT ALL ON FUNCTION ops.refresh_counts() TO service_role;
+
+--
+-- Name: FUNCTION refresh_missing_summary(); Type: ACL; Schema: ops; Owner: -
+--
+
+REVOKE ALL ON FUNCTION ops.refresh_missing_summary() FROM PUBLIC;
+GRANT ALL ON FUNCTION ops.refresh_missing_summary() TO service_role;
 
 --
 -- Name: FUNCTION snapshot_metrics(); Type: ACL; Schema: ops; Owner: -
@@ -3355,6 +3530,22 @@ GRANT SELECT ON TABLE api.word_filter_results TO authenticated;
 GRANT ALL ON TABLE api.report_missing_word_filter TO service_role;
 GRANT SELECT ON TABLE api.report_missing_word_filter TO anon;
 GRANT SELECT ON TABLE api.report_missing_word_filter TO authenticated;
+
+--
+-- Name: TABLE missing_summary; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.missing_summary TO service_role;
+GRANT SELECT ON TABLE ops.missing_summary TO anon;
+GRANT SELECT ON TABLE ops.missing_summary TO authenticated;
+
+--
+-- Name: TABLE missing_summary_live; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.missing_summary_live TO service_role;
+GRANT SELECT ON TABLE ops.missing_summary_live TO anon;
+GRANT SELECT ON TABLE ops.missing_summary_live TO authenticated;
 
 --
 -- Name: TABLE report_missing_word_filter_summary; Type: ACL; Schema: api; Owner: -
