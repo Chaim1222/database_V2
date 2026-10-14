@@ -58,6 +58,7 @@ def main(argv):
                 stats[group] = {"complete": False, "error_type": type(exc).__name__}
             if stats[group].get("complete") is False:
                 stats[group]["retry"] = f"python -m collector.cli enrich {group}"
+        rpc.call("maintenance_refresh_counts", {})   # סיכום "חסר" מחושב מראש (0043); בלי רענון נופל לחישוב החי עד הסנכרון הבא
         # All independent groups finish before reporting partial completion.
     elif argv[0] == "templates":
         stats = {"checked": run_pending(mws["mechalol"], mws["wikipedia"], rpc)}
