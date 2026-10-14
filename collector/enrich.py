@@ -2,7 +2,8 @@
 העשרה של דפי ויקיפדיה "חסרים" (PLAN_STAGE4.md 4.2). קבוצות שדות עצמאיות:
   created  - תאריך הגרסה הראשונה (בקשה לכל דף: rvdir=newer לא נתמך לאצווה)
   length   - אורך הדף (info, אצווה)
-  desc     - תיאור בעברית מוויקינתונים (אצווה לפי sitelinks של hewiki)
+  desc     - תיאור בעברית מוויקינתונים, דרך ה-API של ויקיפדיה (prop=description, מקור central = ויקינתונים; אצווה).
+             לא ישירות מ-wikidata.org: הוא מחזיר 429 לכתובות ענן משותפות (נצפה 14.10 בריצה המתוזמנת)
   redirect - האם הכותרת קיימת במכלול כהפניה (info, אצווה, בלי מעקב הפניות)
   locks    - רמת הנעילה במכלול (inprop=allevel): create = נעול ליצירה (החרגה), read = נעול לקריאה (v1: check_missing_locked.py)
 כישלון בבדיקה לא נשלח למסד ולכן אינו דורס ערך קודם; הדף נשאר ממתין ויבדק בריצה הבאה.
@@ -14,7 +15,6 @@ from .state import chunks
 
 BATCH = 50
 GROUPS = ("redirect", "locks", "length", "desc", "created")
-WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 
 SKIP_BUDGET = {"left": 20}   # כמה כותרות בודדות מותר לדלג עליהן (כשל שליפה או שינוי במקור) בקבוצת העשרה אחת; יותר מזה = חסימה כללית, והריצה נכשלת
 
@@ -104,17 +104,21 @@ def fetch_redirect(mech_mw, pages):
     return rows
 
 
-def fetch_desc(wikidata_mw, pages):
-    """{wiki_id, wikidata_desc}: מחרוזת ריקה אם אין ישות או תיאור (תוצאה לגיטימית: נשמרת כנבדק)."""
+def fetch_desc(wiki_mw, pages):
+    """{wiki_id, wikidata_desc}: מחרוזת ריקה אם אין תיאור בוויקינתונים או שהדף חסר (תוצאה לגיטימית: נשמרת כנבדק).
+    רק תיאור שמקורו ויקינתונים (descriptionsource=central), כמו קודם; תיאור מקומי (local) לא נחשב. תשובה חלקית נכשלת."""
     by_title = {p["title"]: p["wiki_id"] for p in pages}
-    data = wikidata_mw.get({"action": "wbgetentities", "sites": "hewiki", "titles": "|".join(by_title),
-                            "props": "descriptions|sitelinks", "languages": "he"})
+    data = wiki_mw.get({"action": "query", "prop": "description", "descprefersource": "central", "titles": "|".join(by_title)})
+    normalized = {n["to"]: n["from"] for n in data.get("query", {}).get("normalized", [])}
     found = {}
-    for entity in (data.get("entities") or {}).values():
-        title = ((entity.get("sitelinks") or {}).get("hewiki") or {}).get("title")
-        if title:
-            found[title] = ((entity.get("descriptions") or {}).get("he") or {}).get("value") or ""
-    return [{"wiki_id": wiki_id, "wikidata_desc": found.get(title, "")} for title, wiki_id in by_title.items()]
+    for page in _pages(data):
+        title = normalized.get(page.get("title"), page.get("title"))
+        if title not in by_title or title in found:
+            raise RuntimeError("תשובת תיאור עם כותרת לא צפויה או כפולה")
+        found[title] = page.get("description", "") if page.get("descriptionsource") == "central" else ""
+    if set(found) != set(by_title):
+        raise RuntimeError("תשובת תיאור חלקית")
+    return [{"wiki_id": wiki_id, "wikidata_desc": found[title]} for title, wiki_id in by_title.items()]
 
 
 CREATED_PACE = 0.05
@@ -174,11 +178,11 @@ def fetch_locks(mech_mw, pages):
 
 
 FETCHERS = {"locks": ("mech", fetch_locks), "length": ("wiki", fetch_length), "created": ("wiki", fetch_created),
-            "desc": ("wikidata", fetch_desc), "redirect": ("mech", fetch_redirect)}
+            "desc": ("wiki", fetch_desc), "redirect": ("mech", fetch_redirect)}
 
 
 def run_group(group, clients, rpc, limit=None, log=print):
-    """clients: {"wiki": MediaWiki, "mech": MediaWiki, "wikidata": MediaWiki}. ממשיך עד שאין ממתינים."""
+    """clients: {"wiki": MediaWiki, "mech": MediaWiki}. ממשיך עד שאין ממתינים."""
     kind, fetch = FETCHERS[group]
     client = clients[kind]
     SKIP_BUDGET["left"] = 20

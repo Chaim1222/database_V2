@@ -503,10 +503,18 @@ class EnrichTests(unittest.TestCase):
 
     def test_desc_empty_is_a_checked_result(self):
         from collector.enrich import fetch_desc
-        mw = self.Mw({"entities": {"Q1": {"sitelinks": {"hewiki": {"title": "א"}}, "descriptions": {"he": {"value": "תיאור"}}},
-                                   "-1": {"missing": ""}}})
-        rows = {r["wiki_id"]: r["wikidata_desc"] for r in fetch_desc(mw, [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}])}
-        self.assertEqual(rows, {1: "תיאור", 2: ""})
+        mw = self.Mw({"query": {"normalized": [{"from": "ד_ה", "to": "ד ה"}], "pages": [
+            {"title": "א", "pageid": 1, "description": "תיאור", "descriptionsource": "central"},
+            {"title": "ב", "pageid": 2},
+            {"title": "ג", "pageid": 3, "description": "תיאור מקומי", "descriptionsource": "local"},
+            {"title": "ד ה", "pageid": 4, "description": "אחרי נרמול", "descriptionsource": "central"},
+            {"title": "ו", "missing": True}]}})
+        pages = [{"wiki_id": 1, "title": "א"}, {"wiki_id": 2, "title": "ב"}, {"wiki_id": 3, "title": "ג"}, {"wiki_id": 4, "title": "ד_ה"}, {"wiki_id": 5, "title": "ו"}]
+        rows = {r["wiki_id"]: r["wikidata_desc"] for r in fetch_desc(mw, pages)}
+        self.assertEqual(rows, {1: "תיאור", 2: "", 3: "", 4: "אחרי נרמול", 5: ""})
+        self.assertEqual(mw.calls[0]["prop"], "description")
+        with self.assertRaises(RuntimeError):   # תשובה חלקית
+            fetch_desc(self.Mw({"query": {"pages": [{"title": "א", "pageid": 1}]}}), pages[:2])
 
     def test_locks(self):
         from collector.enrich import fetch_locks
