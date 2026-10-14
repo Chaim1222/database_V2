@@ -1130,7 +1130,7 @@ CREATE FUNCTION ops.bump_missing_summary() RETURNS trigger
     SET search_path TO ''
     AS $$
 begin
-    update ops.missing_summary set gen = gen + 1;
+    update ops.missing_summary set gen = gen + 1 where id;
     return null;
 end;
 $$;
@@ -1195,7 +1195,7 @@ declare
 begin
     select gen into g from ops.missing_summary;
     select coalesce(jsonb_agg(to_jsonb(l)), '[]') into r from ops.missing_summary_live l;
-    update ops.missing_summary set rows = r, built_gen = g, built_at = now();
+    update ops.missing_summary set rows = r, built_gen = g, built_at = now() where id;
     return (select coalesce(sum((x ->> 'n')::bigint), 0) from jsonb_array_elements(r) x);
 end;
 $$;
