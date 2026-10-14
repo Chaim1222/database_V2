@@ -6,7 +6,7 @@ import sys
 from .mw import USER_AGENT, MediaWiki
 from .rpc import Rpc
 from .dump import DumpSource
-from .enrich import GROUPS, WIKIDATA_API, run_group
+from .enrich import GROUPS, run_group
 from .initial_load import run_initial_load
 from .reconcile import run_reconcile
 from .revcheck import run_revcheck
@@ -45,7 +45,7 @@ def main(argv):
         print(json.dumps({"unexplained": {s["site"]: s["unexplained_pages"] for s in report["sites"]}}, ensure_ascii=False, indent=2))
         return 0 if report["ok"] else 1
     elif argv[0] == "enrich":
-        clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"], "wikidata": MediaWiki(WIKIDATA_API)}
+        clients = {"wiki": mws["wikipedia"], "mech": mws["mechalol"]}
         groups = argv[1:] or list(GROUPS)
         unknown = set(groups) - set(GROUPS)
         if unknown:
