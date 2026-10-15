@@ -85,6 +85,20 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(reads), 3)
         self.assertTrue(result['stopped_early'])
 
+    def test_maintenance_rebuilds_missing_summary_after_prune(self):
+        # prune מוחק מ-wiki_enrichment ו-content_scan ומסמן את סיכום "חסר" כלא עדכני; הרענון חייב להיות אחריו.
+        calls = []
+        def call(name, payload):
+            calls.append(name)
+            if name == 'maintenance_refresh_gap':
+                return {'last_id': None if payload['p_after'] else 5, 'changed': 1}
+            return {'enrichment': 0, 'scan': 0} if name == 'maintenance_prune' else None
+        with patch.dict(os.environ, {'SUPABASE_URL': 'fixture', 'SUPABASE_SERVICE_KEY': 'fixture'}), patch.object(cli, 'Rpc') as rpc, contextlib.redirect_stdout(io.StringIO()) as out:
+            rpc.return_value.call.side_effect = call
+            self.assertEqual(cli.main(['maintenance']), 0)
+        self.assertEqual(calls, ['maintenance_refresh_gap', 'maintenance_refresh_gap', 'maintenance_prune', 'maintenance_refresh_counts'])
+        self.assertIn('"gap_changed": 1', out.getvalue())
+
     def test_cli_continues_next_group_and_returns_partial_only_at_end(self):
         calls = []
         def run(group, *_):
