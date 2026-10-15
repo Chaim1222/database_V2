@@ -1,0 +1,35 @@
+name: "דיווח לדשבורד"
+# ריצה שהופעלה מהדשבורד (קלט dashboard_request, ראו 0046) מדווחת התחלה וסיום ל-api.report_run, והדשבורד מציג את המצב.
+# ריצה מתוזמנת או ידנית מ-GitHub (בלי הקלט) לא מדווחת. כשל בדיווח לא מכשיל את הריצה: הדשבורד מציג בסוף "נמשך זמן רב".
+description: "מדווח למסד על התחלה או סיום של ריצה שהופעלה מהדשבורד"
+inputs:
+  workflow:
+    description: "שם קובץ ה-workflow, כמו ברשימה של 0046"
+    required: true
+  request:
+    description: "inputs.dashboard_request"
+    required: true
+  status:
+    description: "running | success | failed"
+    required: true
+  supabase_url:
+    required: true
+  service_key:
+    required: true
+runs:
+  using: composite
+  steps:
+    - if: ${{ inputs.request != '' }}
+      shell: bash
+      env:
+        WORKFLOW: ${{ inputs.workflow }}
+        REQUEST: ${{ inputs.request }}
+        STATUS: ${{ inputs.status }}
+        SUPABASE_URL: ${{ inputs.supabase_url }}
+        SUPABASE_SERVICE_KEY: ${{ inputs.service_key }}
+      run: |
+        body=$(jq -n --arg w "$WORKFLOW" --arg r "$REQUEST" --arg s "$STATUS" '{p_workflow: $w, p_request: $r, p_status: $s}')
+        curl -sS --fail-with-body --retry 3 -X POST "$SUPABASE_URL/rest/v1/rpc/report_run" \
+          -H "apikey: $SUPABASE_SERVICE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+          -H "Content-Type: application/json" -H "Content-Profile: api" -H "Accept-Profile: api" \
+          -d "$body" || echo "::warning::הדיווח לדשבורד נכשל ($STATUS)"
