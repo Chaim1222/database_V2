@@ -332,6 +332,91 @@ end;
 $$;
 
 --
+-- Name: report_run(text, uuid, text); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.report_run(p_workflow text, p_request uuid, p_status text) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+begin
+    if p_status not in ('running', 'success', 'failed') then
+        raise exception 'סטטוס לא חוקי: %', p_status using errcode = '22023';
+    end if;
+    update ops.dashboard_run
+       set status = p_status,
+           started_at = case when p_status = 'running' then now() else coalesce(started_at, now()) end,
+           finished_at = case when p_status = 'running' then null else now() end
+     where workflow = p_workflow and request_id = p_request;
+    return found;
+end;
+$$;
+
+--
+-- Name: request_run(text); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.request_run(p_workflow text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $_$
+declare
+    v_row     ops.dashboard_run;
+    v_code    integer;
+    v_token   text;
+    v_request uuid := gen_random_uuid();
+begin
+    if not api.is_admin() then
+        raise exception 'אין הרשאה להפעיל ריצה' using errcode = '42501';
+    end if;
+    if ops.dashboard_run_window(p_workflow) is null then
+        raise exception 'workflow לא מורשה: %', p_workflow using errcode = '22023';
+    end if;
+
+    select * into v_row from ops.dashboard_run where workflow = p_workflow for update;
+    if found and v_row.status in ('requested', 'running')
+       and v_row.requested_at > now() - ops.dashboard_run_window(p_workflow) then
+        -- בקשה שנדחתה ב-GitHub לא תתחיל לעולם, ולכן אינה חוסמת.
+        if v_row.http_request_id is not null and to_regclass('net._http_response') is not null then
+            execute 'select status_code from net._http_response where id = $1' into v_code using v_row.http_request_id;
+        end if;
+        if v_code is null or v_code = 204 then
+            return jsonb_build_object('started', false, 'reason', 'already_running', 'requested_at', v_row.requested_at);
+        end if;
+    end if;
+
+    if to_regprocedure('net.http_post(text, jsonb, jsonb, jsonb, integer)') is null then
+        raise exception 'ההרחבה pg_net אינה מופעלת (ראו הערות 0046)' using errcode = '55000';
+    end if;
+    select decrypted_secret into v_token from vault.decrypted_secrets where name = 'github_dispatch_token';
+    if v_token is null then
+        raise exception 'חסר הסוד github_dispatch_token בכספת (ראו הערות 0046)' using errcode = '55000';
+    end if;
+
+    insert into ops.dashboard_run (workflow, request_id, status, requested_by, requested_at, started_at, finished_at, http_request_id)
+    values (p_workflow, v_request, 'requested', auth.uid(), now(), null, null, null)
+    on conflict (workflow) do update set request_id = excluded.request_id, status = excluded.status,
+        requested_by = excluded.requested_by, requested_at = excluded.requested_at,
+        started_at = null, finished_at = null, http_request_id = null;
+
+    update ops.dashboard_run set http_request_id = net.http_post(
+        url     := 'https://api.github.com/repos/Chaim1222/database_V2/actions/workflows/' || p_workflow || '/dispatches',
+        body    := jsonb_build_object('ref', 'main', 'inputs', jsonb_build_object('dashboard_request', v_request::text)),
+        params  := '{}'::jsonb,
+        headers := jsonb_build_object(
+            'Accept', 'application/vnd.github+json',
+            'Authorization', 'Bearer ' || v_token,
+            'X-GitHub-Api-Version', '2022-11-28',
+            'User-Agent', 'mechalol-dashboard-v2',
+            'Content-Type', 'application/json'),
+        timeout_milliseconds := 10000)
+    where workflow = p_workflow;
+
+    return jsonb_build_object('started', true, 'requested_at', now());
+end;
+$_$;
+
+--
 -- Name: rev_scope(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
 --
 
@@ -367,6 +452,40 @@ BEGIN
     LIMIT p_limit;
 END;
 $$;
+
+--
+-- Name: run_status(text); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.run_status(p_workflow text) RETURNS jsonb
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO ''
+    AS $_$
+declare
+    v_row  ops.dashboard_run;
+    v_code integer;
+    v_body text;
+begin
+    if not api.is_admin() then
+        raise exception 'אין הרשאה' using errcode = '42501';
+    end if;
+    select * into v_row from ops.dashboard_run where workflow = p_workflow;
+    if not found then
+        return jsonb_build_object('status', null);
+    end if;
+    if v_row.http_request_id is not null and to_regclass('net._http_response') is not null then
+        execute 'select status_code, coalesce(error_msg, content) from net._http_response where id = $1'
+            into v_code, v_body using v_row.http_request_id;
+    end if;
+    return jsonb_build_object(
+        'status', v_row.status,
+        'requested_at', v_row.requested_at,
+        'started_at', v_row.started_at,
+        'finished_at', v_row.finished_at,
+        -- GitHub מחזיר 204 כשההפעלה התקבלה; כל קוד אחר = ההפעלה נדחתה.
+        'dispatch_error', case when v_code is not null and v_code <> 204 then 'GitHub ' || v_code || ': ' || left(coalesce(v_body, ''), 300) end);
+end;
+$_$;
 
 --
 -- Name: scan_pending(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
@@ -1133,6 +1252,20 @@ begin
     update ops.missing_summary set gen = gen + 1 where id;
     return null;
 end;
+$$;
+
+--
+-- Name: dashboard_run_window(text); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.dashboard_run_window(p_workflow text) RETURNS interval
+    LANGUAGE sql IMMUTABLE
+    SET search_path TO ''
+    AS $$
+    select case p_workflow
+        when 'sync.yml' then interval '4 hours'           -- סנכרון 90 דקות + סריקה 120 דקות
+        when 'maintenance.yml' then interval '30 minutes'  -- timeout 15 דקות
+    end;
 $$;
 
 --
@@ -2195,6 +2328,22 @@ CREATE SEQUENCE mirror.page_event_id_seq
 ALTER SEQUENCE mirror.page_event_id_seq OWNED BY mirror.page_event.id;
 
 --
+-- Name: dashboard_run; Type: TABLE; Schema: ops; Owner: -
+--
+
+CREATE TABLE ops.dashboard_run (
+    workflow text NOT NULL,
+    request_id uuid NOT NULL,
+    status text NOT NULL,
+    requested_by uuid,
+    requested_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    http_request_id bigint,
+    CONSTRAINT dashboard_run_status_check CHECK ((status = ANY (ARRAY['requested'::text, 'running'::text, 'success'::text, 'failed'::text])))
+);
+
+--
 -- Name: health_threshold; Type: TABLE; Schema: ops; Owner: -
 --
 
@@ -2440,6 +2589,13 @@ ALTER TABLE ONLY mirror.wiki_page
 
 ALTER TABLE ONLY ops.dashboard_counts
     ADD CONSTRAINT dashboard_counts_pkey PRIMARY KEY (key);
+
+--
+-- Name: dashboard_run dashboard_run_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
+--
+
+ALTER TABLE ONLY ops.dashboard_run
+    ADD CONSTRAINT dashboard_run_pkey PRIMARY KEY (workflow);
 
 --
 -- Name: health_threshold health_threshold_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
@@ -2902,6 +3058,12 @@ ALTER TABLE mirror.wiki_page ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ops.dashboard_counts ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: dashboard_run; Type: ROW SECURITY; Schema: ops; Owner: -
+--
+
+ALTER TABLE ops.dashboard_run ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: health_threshold; Type: ROW SECURITY; Schema: ops; Owner: -
 --
 
@@ -3220,11 +3382,34 @@ REVOKE ALL ON FUNCTION api.reconcile_record(p_snapshot_meta jsonb, p_summary jso
 GRANT ALL ON FUNCTION api.reconcile_record(p_snapshot_meta jsonb, p_summary jsonb, p_findings jsonb) TO service_role;
 
 --
+-- Name: FUNCTION report_run(p_workflow text, p_request uuid, p_status text); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.report_run(p_workflow text, p_request uuid, p_status text) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.report_run(p_workflow text, p_request uuid, p_status text) TO service_role;
+
+--
+-- Name: FUNCTION request_run(p_workflow text); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.request_run(p_workflow text) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.request_run(p_workflow text) TO service_role;
+GRANT ALL ON FUNCTION api.request_run(p_workflow text) TO authenticated;
+
+--
 -- Name: FUNCTION rev_scope(p_after bigint, p_limit integer); Type: ACL; Schema: api; Owner: -
 --
 
 REVOKE ALL ON FUNCTION api.rev_scope(p_after bigint, p_limit integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION api.rev_scope(p_after bigint, p_limit integer) TO service_role;
+
+--
+-- Name: FUNCTION run_status(p_workflow text); Type: ACL; Schema: api; Owner: -
+--
+
+REVOKE ALL ON FUNCTION api.run_status(p_workflow text) FROM PUBLIC;
+GRANT ALL ON FUNCTION api.run_status(p_workflow text) TO service_role;
+GRANT ALL ON FUNCTION api.run_status(p_workflow text) TO authenticated;
 
 --
 -- Name: FUNCTION scan_pending(p_after bigint, p_limit integer); Type: ACL; Schema: api; Owner: -
@@ -3371,6 +3556,13 @@ GRANT ALL ON FUNCTION mirror.title_key(t text) TO service_role;
 
 REVOKE ALL ON FUNCTION ops.bump_missing_summary() FROM PUBLIC;
 GRANT ALL ON FUNCTION ops.bump_missing_summary() TO service_role;
+
+--
+-- Name: FUNCTION dashboard_run_window(p_workflow text); Type: ACL; Schema: ops; Owner: -
+--
+
+REVOKE ALL ON FUNCTION ops.dashboard_run_window(p_workflow text) FROM PUBLIC;
+GRANT ALL ON FUNCTION ops.dashboard_run_window(p_workflow text) TO service_role;
 
 --
 -- Name: FUNCTION health(); Type: ACL; Schema: ops; Owner: -
@@ -3788,6 +3980,12 @@ GRANT SELECT ON TABLE derived.mech_key TO authenticated;
 --
 
 GRANT ALL ON SEQUENCE mirror.page_event_id_seq TO service_role;
+
+--
+-- Name: TABLE dashboard_run; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.dashboard_run TO service_role;
 
 --
 -- Name: TABLE health_threshold; Type: ACL; Schema: ops; Owner: -
