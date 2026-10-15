@@ -4,6 +4,11 @@ name: "ידני: ניקיון וחישוב מחדש"
 # ומחיקת העשרה וסינון של דפים שכבר אינם "חסרים" וישנים מ-90 יום (maintenance_prune).
 on:
   workflow_dispatch:
+    inputs:
+      dashboard_request:
+        description: "מזהה בקשה מהדשבורד (ממלא המסד, 0046); ריק בהפעלה ידנית"
+        required: false
+        default: ""
 
 concurrency:
   group: v2-db-write
@@ -21,6 +26,13 @@ jobs:
       PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/report-run
+        with:
+          workflow: maintenance.yml
+          request: ${{ inputs.dashboard_request }}
+          status: running
+          supabase_url: ${{ secrets.SUPABASE_URL }}
+          service_key: ${{ secrets.SUPABASE_SERVICE_KEY }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -30,6 +42,14 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - if: always()
+        uses: ./.github/actions/report-run
+        with:
+          workflow: maintenance.yml
+          request: ${{ inputs.dashboard_request }}
+          status: ${{ job.status == 'success' && 'success' || 'failed' }}
+          supabase_url: ${{ secrets.SUPABASE_URL }}
+          service_key: ${{ secrets.SUPABASE_SERVICE_KEY }}
       - if: always()
         uses: ./.github/actions/alert
         with:
