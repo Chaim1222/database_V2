@@ -28,8 +28,11 @@ def main(argv):
             if result["last_id"] is None:
                 break
             after, changed = result["last_id"], changed + result["changed"]
+        prune = rpc.call("maintenance_prune", {})
+        # אחרון: המחיקה ב-prune מסמנת את סיכום "חסר" (0043) כלא עדכני, והרענון בונה אותו מחדש. בסדר ההפוך הדשבורד
+        # נשאר על החישוב החי (שגיאות 500 על Nano) עד הריצה הבאה.
         rpc.call("maintenance_refresh_counts", {})
-        print(json.dumps({"gap_changed": changed, "prune": rpc.call("maintenance_prune", {})}, ensure_ascii=False))
+        print(json.dumps({"gap_changed": changed, "prune": prune}, ensure_ascii=False))
         return 0
     if argv[0] == "health":
         problems = rpc.call("health_check", {})
