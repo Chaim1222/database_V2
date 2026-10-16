@@ -226,7 +226,7 @@ $$;
 CREATE FUNCTION api.maintenance_refresh_counts() RETURNS void
     LANGUAGE sql
     SET search_path TO ''
-    AS $$ select ops.refresh_counts(); select ops.snapshot_metrics(); $$;
+    AS $$ select ops.refresh_counts(); select ops.snapshot_metrics(); select ops.refresh_match_conflicts(); $$;
 
 --
 -- Name: maintenance_refresh_gap(bigint, integer); Type: FUNCTION; Schema: api; Owner: -
@@ -1315,6 +1315,36 @@ end;
 $$;
 
 --
+-- Name: refresh_match_conflicts(); Type: FUNCTION; Schema: ops; Owner: -
+--
+
+CREATE FUNCTION ops.refresh_match_conflicts() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+declare r jsonb;
+begin
+    select coalesce(jsonb_agg(to_jsonb(x) order by x.title, x.id), '[]') into r from (
+        -- התבנית מצביעה לדף אחד; wikipedia_id/title - הדף בוויקיפדיה עם הכותרת הזהה
+        select m.page_id as id, m.title, 'template_vs_title' as outcome, t.template_ref,
+               w.page_id as wikipedia_id, w.title as wikipedia_title
+        from derived.template_link t
+        join mirror.mech_page m on m.page_id = t.mech_id
+        join mirror.wiki_page w on mirror.title_key(w.title) = mirror.title_key(m.title) and w.page_id <> t.wiki_id
+        where t.wiki_id is not null
+        union all
+        select m.page_id, m.title, 'disambig_same_title', null, w.page_id, w.title
+        from mirror.mech_page m
+        join mirror.wiki_page w on mirror.title_key(w.title) = mirror.title_key(m.title)
+        where m.status = 'created_in_mech' and m.source_type = 'pirushon'
+    ) x
+    where not exists (select 1 from work.manual_link l where l.mech_id = x.id);
+    update ops.match_conflict_snapshot set rows = r, built_at = now() where id;   -- WHERE: pg-safeupdate בסופבייס (0045)
+    return jsonb_array_length(r);
+end;
+$$;
+
+--
 -- Name: refresh_missing_summary(); Type: FUNCTION; Schema: ops; Owner: -
 --
 
@@ -2241,6 +2271,17 @@ CREATE VIEW api.v_sync_status WITH (security_invoker='true') AS
   ORDER BY r.kind, r.started_at DESC;
 
 --
+-- Name: match_conflict_snapshot; Type: TABLE; Schema: ops; Owner: -
+--
+
+CREATE TABLE ops.match_conflict_snapshot (
+    id boolean DEFAULT true NOT NULL,
+    built_at timestamp with time zone,
+    rows jsonb DEFAULT '[]'::jsonb NOT NULL,
+    CONSTRAINT match_conflict_snapshot_id_check CHECK (id)
+);
+
+--
 -- Name: v_template_issues; Type: VIEW; Schema: api; Owner: -
 --
 
@@ -2249,13 +2290,27 @@ CREATE VIEW api.v_template_issues WITH (security_invoker='true') AS
     m.title,
     c.outcome,
     l.template_ref,
-    c.checked_at
+    c.checked_at,
+    NULL::bigint AS wikipedia_id,
+    NULL::text AS wikipedia_title
    FROM ((derived.template_check c
      JOIN mirror.mech_page m ON ((m.page_id = c.mech_id)))
      LEFT JOIN derived.template_link l ON ((l.mech_id = c.mech_id)))
-  WHERE ((c.outcome = ANY (ARRAY['unresolved'::text, 'denied'::text])) AND (NOT (EXISTS ( SELECT 1
+  WHERE ((c.outcome = 'unresolved'::text) AND (NOT (EXISTS ( SELECT 1
            FROM work.manual_link x
-          WHERE (x.mech_id = c.mech_id)))));
+          WHERE (x.mech_id = c.mech_id)))) AND (NOT (EXISTS ( SELECT 1
+           FROM api.v_rev_tasks r
+          WHERE ((r.id = c.mech_id) AND (r.rev_task = 'deleted_by_rev'::text))))))
+UNION ALL
+ SELECT r.id,
+    r.title,
+    r.outcome,
+    r.template_ref,
+    s.built_at AS checked_at,
+    r.wikipedia_id,
+    r.wikipedia_title
+   FROM (ops.match_conflict_snapshot s
+     CROSS JOIN LATERAL jsonb_to_recordset(s.rows) r(id bigint, title text, outcome text, template_ref text, wikipedia_id bigint, wikipedia_title text));
 
 --
 -- Name: wikipedia_pages; Type: VIEW; Schema: api; Owner: -
@@ -2603,6 +2658,13 @@ ALTER TABLE ONLY ops.dashboard_run
 
 ALTER TABLE ONLY ops.health_threshold
     ADD CONSTRAINT health_threshold_pkey PRIMARY KEY (kind);
+
+--
+-- Name: match_conflict_snapshot match_conflict_snapshot_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
+--
+
+ALTER TABLE ONLY ops.match_conflict_snapshot
+    ADD CONSTRAINT match_conflict_snapshot_pkey PRIMARY KEY (id);
 
 --
 -- Name: metric_snapshot metric_snapshot_pkey; Type: CONSTRAINT; Schema: ops; Owner: -
@@ -3070,6 +3132,12 @@ ALTER TABLE ops.dashboard_run ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ops.health_threshold ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: match_conflict_snapshot; Type: ROW SECURITY; Schema: ops; Owner: -
+--
+
+ALTER TABLE ops.match_conflict_snapshot ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: metric_snapshot; Type: ROW SECURITY; Schema: ops; Owner: -
 --
 
@@ -3098,6 +3166,12 @@ CREATE POLICY public_read ON ops.dashboard_counts FOR SELECT TO anon, authentica
 --
 
 CREATE POLICY public_read ON ops.health_threshold FOR SELECT TO anon, authenticated USING (true);
+
+--
+-- Name: match_conflict_snapshot public_read; Type: POLICY; Schema: ops; Owner: -
+--
+
+CREATE POLICY public_read ON ops.match_conflict_snapshot FOR SELECT TO anon, authenticated USING (true);
 
 --
 -- Name: metric_snapshot public_read; Type: POLICY; Schema: ops; Owner: -
@@ -3579,6 +3653,13 @@ GRANT ALL ON FUNCTION ops.health() TO authenticated;
 GRANT ALL ON FUNCTION ops.refresh_counts() TO service_role;
 
 --
+-- Name: FUNCTION refresh_match_conflicts(); Type: ACL; Schema: ops; Owner: -
+--
+
+REVOKE ALL ON FUNCTION ops.refresh_match_conflicts() FROM PUBLIC;
+GRANT ALL ON FUNCTION ops.refresh_match_conflicts() TO service_role;
+
+--
 -- Name: FUNCTION refresh_missing_summary(); Type: ACL; Schema: ops; Owner: -
 --
 
@@ -3937,6 +4018,14 @@ GRANT SELECT ON TABLE ops.sync_run TO authenticated;
 GRANT ALL ON TABLE api.v_sync_status TO service_role;
 GRANT SELECT ON TABLE api.v_sync_status TO anon;
 GRANT SELECT ON TABLE api.v_sync_status TO authenticated;
+
+--
+-- Name: TABLE match_conflict_snapshot; Type: ACL; Schema: ops; Owner: -
+--
+
+GRANT ALL ON TABLE ops.match_conflict_snapshot TO service_role;
+GRANT SELECT ON TABLE ops.match_conflict_snapshot TO anon;
+GRANT SELECT ON TABLE ops.match_conflict_snapshot TO authenticated;
 
 --
 -- Name: TABLE v_template_issues; Type: ACL; Schema: api; Owner: -
