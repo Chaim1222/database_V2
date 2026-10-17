@@ -23,8 +23,10 @@ def main(argv):
     rpc = Rpc(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     if argv[0] == "maintenance":
         after, changed = 0, 0
-        while True:   # רענון מלא של "חסר" במנות (רשת ביטחון להחלה המצטברת)
-            result = rpc.call("maintenance_refresh_gap", {"p_after": after, "p_limit": 2000})
+        # רענון מלא של "חסר" במנות (רשת ביטחון להחלה המצטברת). 500 ולא 2,000: החסרים מרוכזים בדפים החדשים (העשירון
+        # האחרון לפי מזהה - 19,683 מ-28,000), ומנה של 2,000 שם לקחה 2-4 שניות ועברה את ה-8 של authenticator בעומס (17.10).
+        while True:
+            result = rpc.call("maintenance_refresh_gap", {"p_after": after, "p_limit": 500})
             if result["last_id"] is None:
                 break
             after, changed = result["last_id"], changed + result["changed"]
