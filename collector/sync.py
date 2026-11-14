@@ -2,6 +2,7 @@
 סנכרון דלתא של אתר אחד: איסוף מה נגעו בו בחלון סגור, שאילת המצב הנוכחי, והחלה אטומית דרך RPC.
 נקודת ההתקדמות מתקדמת רק בסיום מוצלח של כל הריצה (api.sync_run_finish).
 """
+import traceback
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
@@ -86,9 +87,11 @@ def run_sync(mws, rpc, now=None, overlap=OVERLAP, dry_run=False):
             stats[site] = sync_site(site, mw, rpc, run_id, since, until, wiki_mw=mws.get("wikipedia"), dry_run=dry_run)
             new_marks[key] = until
         except Exception as exc:
-            errors[site] = type(exc).__name__
-            stats[site] = {"complete": False, "error_type": type(exc).__name__}
-            print(f"sync {site}: incomplete ({type(exc).__name__}); continuing independent sources", flush=True)
+            # ההודעה המלאה נשמרת ב-ops.sync_run וה-traceback בלוג: שם הסוג לבדו ("KeyError") לא אפשר לאבחן את תקלת 11.11.
+            errors[site] = f"{type(exc).__name__}: {exc}"[:300]
+            stats[site] = {"complete": False, "error_type": type(exc).__name__, "error": errors[site]}
+            print(f"sync {site}: incomplete ({errors[site]}); continuing independent sources", flush=True)
+            traceback.print_exc()
     if errors:
         # Keep the existing all-or-nothing watermark contract. Applied batches replay safely.
         message = f"Incomplete sources: {errors}; rerun sync to replay the unchanged window"

@@ -3,6 +3,7 @@ import time
 
 import requests
 
+from .reconcile_compare import window_entries
 from .state import chunks
 
 USER_AGENT = "MechalolWikipediaCompareBot/2.0 (https://www.hamichlol.org.il/; bot@hamichlol.org.il)"
@@ -64,46 +65,36 @@ class MediaWiki:
     def touched(self, since, until):
         """
         מה נגעו בו בחלון הסגור [since, until]: (ids, titles, events).
-        עריכות ויצירות במרחב הראשי; העברות ומחיקות ושחזורים בכל מרחב שם (כולל יעד ההעברה).
+        עריכות ויצירות במרחב הראשי; העברות ומחיקות ושחזורים בכל מרחב שם (כולל יעד ההעברה). השאילתות עצמן: window_entries.
         """
-        if since > until:
-            raise ValueError(f"חלון הפוך: {since} אחרי {until}")
         ids, titles, events = set(), set(), []
         hidden = 0
-        rc ={"action": "query", "list": "recentchanges", "rcnamespace": 0, "rctype": "edit|new",
-              "rcdir": "newer", "rcstart": since, "rcend": until, "rcprop": "title|ids|timestamp|loginfo",
-              "rclimit": 500}
-        for e in self.paged(rc, "recentchanges"):
-            if e.get("timestamp", until) > until:
+        for kind, e in window_entries(self.get, since, until):
+            if kind != "edit_new" and e.get("action") == "delete_redir":
                 continue
-            if e.get("pageid"):
-                ids.add(e["pageid"])
+            if "title" not in e:
+                # רשומת יומן מוסתרת (actionhidden): בלי כותרת ובלי מזהה, ואין דרך לדעת באיזה דף מדובר.
+                # מדלגים ומדווחים; ההשוואה המלאה השבועית היא שמגלה את הדף. בלי הדילוג החלון נתקע לתמיד.
+                hidden += 1
+                continue
+            ts = e.get("timestamp", until)
             titles.add(e["title"])
-            if e.get("type") == "new":
-                events.append({"kind": "create", "page_id": e.get("pageid") or 0, "title": e["title"], "new_title": None, "ts": e["timestamp"]})
-        for log_type in ("move", "delete"):
-            le = {"action": "query", "list": "logevents", "letype": log_type, "ledir": "newer",
-                  "lestart": since, "leend": until, "leprop": "ids|title|type|details|timestamp", "lelimit": 500}
-            for e in self.paged(le, "logevents"):
-                ts = e.get("timestamp", until)
-                if ts > until or e.get("action") == "delete_redir":
-                    continue
-                if "title" not in e:
-                    # רשומת יומן מוסתרת (actionhidden): בלי כותרת ובלי מזהה, ואין דרך לדעת באיזה דף מדובר.
-                    # מדלגים ומדווחים; ההשוואה המלאה השבועית היא שמגלה את הדף. בלי הדילוג החלון נתקע לתמיד.
-                    hidden += 1
-                    continue
-                if e.get("logpage"):
-                    ids.add(e["logpage"])
-                titles.add(e["title"])
-                kind = {"delete": "restore" if e.get("action") == "restore" else "delete"}.get(log_type, "move")
-                new_title = (e.get("params") or {}).get("target_title")
-                if new_title:
-                    titles.add(new_title)
-                events.append({"kind": kind, "page_id": e.get("logpage") or 0, "title": e["title"],
-                               "new_title": new_title, "ts": ts})
+            if kind == "edit_new":
+                if e.get("pageid"):
+                    ids.add(e["pageid"])
+                if e.get("type") == "new":
+                    events.append({"kind": "create", "page_id": e.get("pageid") or 0, "title": e["title"], "new_title": None, "ts": ts})
+                continue
+            if e.get("logpage"):
+                ids.add(e["logpage"])
+            event_kind = "move" if kind == "move" else ("restore" if e.get("action") == "restore" else "delete")
+            new_title = (e.get("params") or {}).get("target_title")
+            if new_title:
+                titles.add(new_title)
+            events.append({"kind": event_kind, "page_id": e.get("logpage") or 0, "title": e["title"],
+                           "new_title": new_title, "ts": ts})
         if hidden:
-            print(f"touched: דולגו {hidden} רשומות יומן מוסתרות (בלי כותרת) בחלון {since}..{until}", flush=True)
+            print(f"touched: דולגו {hidden} רשומות מוסתרות (בלי כותרת) בחלון {since}..{until}", flush=True)
         return ids, titles, events
 
     def info(self, ids=(), titles=()):

@@ -206,11 +206,17 @@ class SyncFlowTests(unittest.TestCase):
         rpc = FakeRpc(self.marks)
         mws = self.mws()
         mws["mechalol"].info = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
-        with self.assertRaises(RuntimeError):
+        import contextlib
+        import io
+        with self.assertRaises(RuntimeError), contextlib.redirect_stderr(io.StringIO()) as err:
             run_sync(mws, rpc, now=self.now)
         finish = rpc.calls[-1][1]
         self.assertEqual(finish["p_status"], "failed")
         self.assertNotIn("p_watermarks", finish)
+        # הודעת השגיאה עצמה נשמרת (לא רק שם הסוג), וה-traceback מגיע ללוג
+        self.assertIn("RuntimeError: boom", finish["p_error"])
+        self.assertEqual(finish["p_stats"]["mechalol"]["error"], "RuntimeError: boom")
+        self.assertIn("Traceback", err.getvalue())
 
     def test_missing_watermark_fails(self):
         rpc = FakeRpc({})
@@ -893,6 +899,26 @@ class RebuildAndDryRunTests(unittest.TestCase):
         self.assertEqual(titles, {"ישן", "חדש"})
         self.assertEqual([(e["kind"], e["page_id"], e["new_title"]) for e in events], [("move", 9, "חדש")])
         self.assertIn("דולגו 2 ", out.getvalue())   # שתי הרשומות המוסתרות מדווחות ללוג
+
+    def test_window_reply_without_the_list_fails_the_sync_read(self):
+        # תשובה בלי הרשימה המבוקשת אינה "אין שינויים": הסנכרון נכשל והחלון יישאל שוב (אותו כלל כמו בהשוואה)
+        from collector.mw import MediaWiki
+
+        class Sess:
+            headers = {}
+
+            def get(self, url, params=None, timeout=None):
+                class R:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self_inner):
+                        return {"batchcomplete": True}
+                return R()
+        with self.assertRaises(RuntimeError):
+            MediaWiki("https://x/api.php", session=Sess()).touched("2026-10-05T10:00:00Z", "2026-10-05T12:00:00Z")
 
 
 class ReconcileFixTests(unittest.TestCase):
