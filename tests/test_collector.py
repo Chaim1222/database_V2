@@ -858,6 +858,42 @@ class RebuildAndDryRunTests(unittest.TestCase):
         self.assertEqual(ids, {7, 8})
         self.assertEqual([(e["kind"], e["page_id"]) for e in events], [("create", 7)])
 
+    def test_hidden_log_entries_are_skipped_not_fatal(self):
+        # התשובה האמיתית של ויקיפדיה מ-11.11.2026: רשומה מוסתרת מגיעה בלי title ובלי logpage
+        import contextlib
+        import io
+
+        from collector.mw import MediaWiki
+
+        class Sess:
+            headers = {}
+
+            def get(self, url, params=None, timeout=None):
+                class R:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self_inner):
+                        if params.get("letype") == "move":
+                            return {"query": {"logevents": [
+                                {"logid": 19924919, "actionhidden": True, "type": "move", "action": "move", "timestamp": "2026-11-11T16:49:31Z"},
+                                {"logid": 5, "logpage": 9, "title": "ישן", "type": "move", "action": "move",
+                                 "params": {"target_title": "חדש"}, "timestamp": "2026-11-11T17:00:00Z"}]}}
+                        if params.get("letype") == "delete":
+                            return {"query": {"logevents": [
+                                {"logid": 19925061, "actionhidden": True, "type": "delete", "action": "delete", "timestamp": "2026-11-11T18:43:51Z"}]}}
+                        return {"query": {"recentchanges": []}}
+                return R()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ids, titles, events = MediaWiki("https://x/api.php", session=Sess()).touched("2026-11-11T10:40:00Z", "2026-11-11T22:00:00Z")
+        self.assertEqual(ids, {9})
+        self.assertEqual(titles, {"ישן", "חדש"})
+        self.assertEqual([(e["kind"], e["page_id"], e["new_title"]) for e in events], [("move", 9, "חדש")])
+        self.assertIn("דולגו 2 ", out.getvalue())   # שתי הרשומות המוסתרות מדווחות ללוג
+
 
 class ReconcileFixTests(unittest.TestCase):
     def test_fix_classification_only_unexplained_and_gated(self):

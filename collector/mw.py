@@ -69,7 +69,8 @@ class MediaWiki:
         if since > until:
             raise ValueError(f"חלון הפוך: {since} אחרי {until}")
         ids, titles, events = set(), set(), []
-        rc = {"action": "query", "list": "recentchanges", "rcnamespace": 0, "rctype": "edit|new",
+        hidden = 0
+        rc ={"action": "query", "list": "recentchanges", "rcnamespace": 0, "rctype": "edit|new",
               "rcdir": "newer", "rcstart": since, "rcend": until, "rcprop": "title|ids|timestamp|loginfo",
               "rclimit": 500}
         for e in self.paged(rc, "recentchanges"):
@@ -87,6 +88,11 @@ class MediaWiki:
                 ts = e.get("timestamp", until)
                 if ts > until or e.get("action") == "delete_redir":
                     continue
+                if "title" not in e:
+                    # רשומת יומן מוסתרת (actionhidden): בלי כותרת ובלי מזהה, ואין דרך לדעת באיזה דף מדובר.
+                    # מדלגים ומדווחים; ההשוואה המלאה השבועית היא שמגלה את הדף. בלי הדילוג החלון נתקע לתמיד.
+                    hidden += 1
+                    continue
                 if e.get("logpage"):
                     ids.add(e["logpage"])
                 titles.add(e["title"])
@@ -96,6 +102,8 @@ class MediaWiki:
                     titles.add(new_title)
                 events.append({"kind": kind, "page_id": e.get("logpage") or 0, "title": e["title"],
                                "new_title": new_title, "ts": ts})
+        if hidden:
+            print(f"touched: דולגו {hidden} רשומות יומן מוסתרות (בלי כותרת) בחלון {since}..{until}", flush=True)
         return ids, titles, events
 
     def info(self, ids=(), titles=()):
