@@ -32,4 +32,5 @@ jobs:
       - name: db/schema.sql מעודכן (נוצר מהמיגרציות)
         run: |
           PGUSER="$USER" PGHOST=/var/run/postgresql db/gen_schema.sh
-          git diff --exit-code db/schema.sql
+          # בלי שורות ריקות: גרסאות pg_dump שונות ב-runners נבדלות רק בהן (נצפה 14.11, PR 56: נכשל ועבר בהרצה חוזרת בלי שינוי)
+          diff -B <(git show HEAD:db/schema.sql) db/schema.sql
