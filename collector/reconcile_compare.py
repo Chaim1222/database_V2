@@ -73,32 +73,23 @@ def _paged(api_get, params, list_key):
         params.update(cont)
 
 
-def collect_window(api_get, since, until):
+def window_entries(api_get, since, until):
     """
-    מזהים וכותרות שנגעו בהם בחלון הסגור [since, until] באתר אחד (api_get(params) -> dict של ה-API):
-      עריכות ויצירות במרחב הראשי (recentchanges), והעברות, מחיקות ושחזורים בכל מרחב שם (logevents).
-    העברה כוללת את יעד ההעברה (params.target_title) ואת logpage.
-    הסוף נאכף פעמיים: rcend/leend בבקשה, וסינון לפי timestamp בתוצאה (תשובה שחורגת לא נספרת).
-    מחזיר (ids, titles, counts) כש-counts = {"edit_new": n, "move": n, "delete": n}.
+    המקום היחיד ששואל את האתר מה השתנה בחלון הסגור [since, until]; משמש גם את הסנכרון (mw.touched) וגם את ההשוואה.
+    מניב (kind, entry): "edit_new" לעריכות ויצירות במרחב הראשי (recentchanges), "move" / "delete" לרשומות היומן בכל מרחב שם.
+    הסוף נאכף פעמיים: rcend/leend בבקשה, וסינון לפי timestamp בתוצאה. תשובה בלי הרשימה המבוקשת מכשילה (אינה "אין שינויים").
+    שדות הרשומה אינם מובטחים: רשומת יומן מוסתרת (actionhidden) מגיעה בלי title ובלי logpage, והקורא חייב לבדוק.
     """
     if since > until:
         raise ValueError(f"חלון הפוך: ההתחלה ({since}) אחרי הסוף ({until}). בשחזור יש להשתמש בנקודות הדלתא שנשמרו בצילום")
-    ids, titles, counts = set(), set(), {"edit_new": 0, "move": 0, "delete": 0}
-
     rc = {
         "action": "query", "list": "recentchanges", "rcnamespace": 0, "rctype": "edit|new",
-        "rcdir": "newer", "rcstart": since, "rcend": until, "rcprop": "title|ids|timestamp",
+        "rcdir": "newer", "rcstart": since, "rcend": until, "rcprop": "title|ids|timestamp|loginfo",
         "rclimit": 500, "formatversion": "2",
     }
     for entry in _paged(api_get, rc, "recentchanges"):
-        if entry.get("timestamp", until) > until:
-            continue
-        counts["edit_new"] += 1
-        if entry.get("pageid"):
-            ids.add(entry["pageid"])
-        if entry.get("title"):
-            titles.add(entry["title"])
-
+        if entry.get("timestamp", until) <= until:
+            yield "edit_new", entry
     for log_type in ("move", "delete"):
         params = {
             "action": "query", "list": "logevents", "letype": log_type, "ledir": "newer",
@@ -106,16 +97,27 @@ def collect_window(api_get, since, until):
             "lelimit": 500, "formatversion": "2",
         }
         for event in _paged(api_get, params, "logevents"):
-            if event.get("timestamp", until) > until:
-                continue
-            counts[log_type] += 1
-            if event.get("logpage"):
-                ids.add(event["logpage"])
-            if event.get("title"):
-                titles.add(event["title"])
-            target = (event.get("params") or {}).get("target_title")
-            if target:
-                titles.add(target)
+            if event.get("timestamp", until) <= until:
+                yield log_type, event
+
+
+def collect_window(api_get, since, until):
+    """
+    מזהים וכותרות שנגעו בהם בחלון הסגור [since, until] באתר אחד (api_get(params) -> dict של ה-API), מתוך window_entries.
+    העברה כוללת את יעד ההעברה (params.target_title) ואת logpage.
+    מחזיר (ids, titles, counts) כש-counts = {"edit_new": n, "move": n, "delete": n}.
+    """
+    ids, titles, counts = set(), set(), {"edit_new": 0, "move": 0, "delete": 0}
+    for kind, entry in window_entries(api_get, since, until):
+        counts[kind] += 1
+        page_id = entry.get("pageid") if kind == "edit_new" else entry.get("logpage")
+        if page_id:
+            ids.add(page_id)
+        if entry.get("title"):
+            titles.add(entry["title"])
+        target = (entry.get("params") or {}).get("target_title") if kind != "edit_new" else None
+        if target:
+            titles.add(target)
     return ids, titles, counts
 
 

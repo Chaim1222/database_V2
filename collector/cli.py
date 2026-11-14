@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import traceback
 
 from .mw import USER_AGENT, MediaWiki
 from .rpc import Rpc
@@ -58,7 +59,8 @@ def main(argv):
             try:
                 stats[group] = run_group(group, clients, rpc)
             except Exception as exc:
-                stats[group] = {"complete": False, "error_type": type(exc).__name__}
+                stats[group] = {"complete": False, "error_type": type(exc).__name__, "error": f"{type(exc).__name__}: {exc}"[:300]}
+                traceback.print_exc()
             if stats[group].get("complete") is False:
                 stats[group]["retry"] = f"python -m collector.cli enrich {group}"
         # All independent groups finish before reporting partial completion.
