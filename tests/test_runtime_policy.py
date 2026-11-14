@@ -51,6 +51,52 @@ class EnrichmentRaceTests(unittest.TestCase):
             enrich.fetch_created(Reply({'query': {'pages': [{'pageid': 1, 'title': 'א'}]}}), [{'wiki_id': 1, 'title': 'א'}])
         self.assertEqual(enrich.SKIP_BUDGET['left'], 20)
 
+    @patch('collector.enrich.time.sleep')
+    def test_source_race_alone_does_not_fail_the_run(self, _sleep):
+        class Rpc:
+            def call(self, fn, payload):
+                if fn == 'enrich_pending':
+                    return [] if payload['p_after'] else [{'wiki_id': 1, 'title': 'א'}, {'wiki_id': 2, 'title': 'ב'}]
+        for group, live in (('length', {'pageid': 1, 'title': 'א', 'length': 5}),
+                            ('created', {'pageid': 1, 'title': 'א', 'revisions': [{'timestamp': '2020-01-01T00:00:00Z'}]})):
+            class Mw:
+                def get(self, params):
+                    pages = [live, {'title': 'ב', 'missing': True}]
+                    if group == 'created':
+                        pages = [p for p in pages if p['title'] == params['titles']]
+                    return {'query': {'pages': pages}}
+            with self.subTest(group=group):
+                result = enrich.run_group(group, {'wiki': Mw()}, Rpc(), log=lambda *_: None)
+                self.assertTrue(result['complete'])
+                self.assertEqual((result['done'], result['source_changed_ids'], result['skipped_ids']), (1, [2], []))
+
+    def test_other_skips_and_exhausted_budget_still_fail(self):
+        import requests
+
+        class Rpc:
+            def __init__(self, n):
+                self.n = n
+
+            def call(self, fn, payload):
+                if fn == 'enrich_pending':
+                    return [] if payload['p_after'] else [{'wiki_id': i, 'title': str(i)} for i in range(1, self.n + 1)]
+
+        class Blocked:   # חסימת 403 לכותרת: דילוג שאינו שינוי במקור
+            def get(self, params):
+                response = requests.Response()
+                response.status_code = 403
+                raise requests.HTTPError(response=response)
+        result = enrich.run_group('redirect', {'mech': Blocked()}, Rpc(1), log=lambda *_: None)
+        self.assertFalse(result['complete'])
+        self.assertEqual((result['skipped_ids'], result['source_changed_ids']), ([1], []))
+
+        class AllMissing:   # יותר מ-20 דפים חסרים: לא מרוץ אלא בעיה כללית
+            def get(self, params):
+                return {'query': {'pages': [{'title': t, 'missing': True} for t in params['titles'].split('|')]}}
+        result = enrich.run_group('length', {'wiki': AllMissing()}, Rpc(21), log=lambda *_: None)
+        self.assertFalse(result['complete'])
+        self.assertEqual(len(result['failed_ids']), 21)
+
     def test_skipped_page_remains_pending_next_run(self):
         class Rpc:
             def __init__(self):

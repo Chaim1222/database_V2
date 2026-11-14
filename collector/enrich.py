@@ -16,6 +16,7 @@ from .state import chunks
 BATCH = 50
 GROUPS = ("redirect", "locks", "length", "desc", "created")
 
+SOURCE_CHANGED = set()   # כותרות שדולגו בקבוצה הנוכחית כי המקור אישר שהדף נמחק או שהכותרת עברה למזהה אחר (לא כשל)
 SKIP_BUDGET = {"left": 20}   # כמה כותרות בודדות מותר לדלג עליהן (כשל שליפה או שינוי במקור) בקבוצת העשרה אחת; יותר מזה = חסימה כללית, והריצה נכשלת
 
 
@@ -46,6 +47,7 @@ def _skip_changed(title, reason, log=print):
     SKIP_BUDGET["left"] -= 1
     if SKIP_BUDGET["left"] < 0:
         raise RuntimeError("יותר מדי דפים השתנו או נכשלו בשליפה; נדרש סנכרון ובדיקה חוזרת")
+    SOURCE_CHANGED.add(title)
     log(f"העשרה: מדלג על {title!r}: {reason}; נשאר ממתין לבדיקה חוזרת")
 
 
@@ -186,8 +188,9 @@ def run_group(group, clients, rpc, limit=None, log=print):
     kind, fetch = FETCHERS[group]
     client = clients[kind]
     SKIP_BUDGET["left"] = 20
+    SOURCE_CHANGED.clear()
     after, consecutive_failures = 0, 0
-    result = {"done": 0, "failed_ids": [], "skipped_ids": [], "complete": True}
+    result = {"done": 0, "failed_ids": [], "skipped_ids": [], "source_changed_ids": [], "complete": True}
     while True:
         try:
             pending = rpc.call("enrich_pending", {"p_group": group, "p_after": after, "p_limit": 500}) or []
@@ -214,12 +217,16 @@ def run_group(group, clients, rpc, limit=None, log=print):
                 continue
             consecutive_failures = 0
             written = {r["wiki_id"] for r in rows}
-            skipped = [p["wiki_id"] for p in part if p["wiki_id"] not in written]
+            unwritten = [p for p in part if p["wiki_id"] not in written]
+            # דף שהמקור אישר שנמחק או הוחלף אינו כשל: הוא נשאר ממתין, והסנכרון הבא מעדכן את הזהות (בתוך תקציב הדילוגים).
+            # כל דילוג אחר (חסימת 403, כשל שליפה) עדיין מסמן את הריצה כלא שלמה.
+            result["source_changed_ids"].extend(p["wiki_id"] for p in unwritten if p["title"] in SOURCE_CHANGED)
+            skipped = [p["wiki_id"] for p in unwritten if p["title"] not in SOURCE_CHANGED]
             result["skipped_ids"].extend(skipped)
             result["complete"] = result["complete"] and not skipped
             result["done"] += len(rows)
         after = pending[-1]["wiki_id"]
-        log(f"העשרה {group}: הושלמו {result['done']:,}; לא הושלמו {len(result['failed_ids']) + len(result['skipped_ids']):,}")
+        log(f"העשרה {group}: הושלמו {result['done']:,}; לא הושלמו {len(result['failed_ids']) + len(result['skipped_ids']):,}; השתנו במקור {len(result['source_changed_ids']):,}")
         if limit and result["done"] >= limit:
             result.update(complete=False, stopped_early=True)
             return result
